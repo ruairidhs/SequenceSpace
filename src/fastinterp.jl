@@ -1,12 +1,8 @@
-using Interpolations
-using Test
-using BenchmarkTools
+# Fast methods for linear interpolation when the input vector is increasing
 
 function _innerinterp(x, n1, n2, v1, v2)
     muladd((x - n1) / (n2 - n1), v2 - v1, v1)
 end
-
-# old
 
 function fi2(x, start, nodes, vals)
 
@@ -32,7 +28,6 @@ function fi2(x, start, nodes, vals)
     return _innerinterp(x, nodes[end-1], nodes[end], vals[end-1], vals[end]), length(nodes)
 end
 
-
 function fastinterp!(res, xs, nodes, vals)
     start = 1
     for i in eachindex(res)
@@ -40,48 +35,8 @@ function fastinterp!(res, xs, nodes, vals)
     end
 end
 
-# coefficients method
-_inner2(x, n, v, coef) = muladd(x-n, coef, v)
 
-function makecoefs!(coefs, nodes, vals)
-    coefs[1] = (vals[2] - vals[1]) / (nodes[2] - nodes[1])
-    coefs[2] = coefs[1]
-    for i in 3:length(nodes)
-        coefs[i] = (vals[i] - vals[i-1]) / (nodes[i] - nodes[i-1])
-    end
-end
-
-function fi3(x, start, nodes, vals, coefs)
-    if start == length(nodes)
-        return _inner2(x, nodes[end], vals[end], coefs[end]), start
-    elseif start == 1
-        if x <= nodes[1]
-            return _inner2(x, nodes[1], vals[1], coefs[1]), 1
-        else
-            @inbounds for i in 2:length(nodes)-1
-                if x <= nodes[i]
-                    return _inner2(x, nodes[i], vals[i], coefs[i]), i
-                end
-            end
-        end
-    else
-        @inbounds for i in start:length(nodes)-1
-            if x <= nodes[i]
-                return _inner2(x, nodes[i], vals[i], coefs[i]), i
-            end
-        end
-    end
-    return _inner2(x, nodes[end], vals[end], coefs[end]), start
-end
-
-function fastinterp2!(res, coefs, xs, nodes, vals)
-    makecoefs!(coefs, nodes, vals)
-    start = 1
-    for i in eachindex(res)
-        res[i], start = fi3(xs[i], start, nodes, vals, coefs)
-    end
-end
-
+#=
 # ===== generate test data =====
 function gen_data(T)
     nodes = sort(rand(T) * 10)
@@ -152,3 +107,4 @@ function run_benchmark(T)
     =#
 
 end
+=#
