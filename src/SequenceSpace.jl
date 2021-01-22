@@ -1,13 +1,29 @@
 module SequenceSpace
 
-# using xyz
+using ForwardDiff
+using LinearAlgebra
 
-# export abc
+# Used in sparseblocks.jl
+using SparseArrays
+using SparseDiffTools
+using SparsityDetection
+
+export Block,
+       inputs,
+       outputs,
+       jacobian,
+       SparseBlock
 
 # maybe some consts?
 
-# maybe some code or just includes("f1.jl") etc
-
 include("fastinterp.jl")
+
+# Each subtype must implement the following methods:
+#   - inputs
+#   - outputs
+#   - jacobian
+abstract type Block end
+
+include("sparseblocks.jl")
 
 end # module
