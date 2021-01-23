@@ -1,7 +1,9 @@
 module SequenceSpace
 
+
 using ForwardDiff
 using LinearAlgebra
+using OffsetArrays
 
 # Used in sparseblocks.jl
 using SparseArrays
@@ -12,7 +14,9 @@ export Block,
        inputs,
        outputs,
        jacobian,
-       SparseBlock
+       SparseBlock,
+       HetBlock,
+       fastinterp!
 
 # maybe some consts?
 
@@ -25,5 +29,6 @@ include("fastinterp.jl")
 abstract type Block end
 
 include("sparseblocks.jl")
+include("hetblocks.jl")
 
 end # module

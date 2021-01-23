@@ -1,9 +1,8 @@
-using ForwardDiff
-
-# ===== Set up structures =====
-abstract type Block end
-
 struct HetBlock <: Block
+
+    inputs::Vector{Symbol}
+    outputs::Vector{Symbol}
+    T::Int
 
     v!::Function # iterate value function backwards
     p!::Function # update policy
@@ -14,12 +13,13 @@ struct HetBlock <: Block
 
 end
 
-function (ha::HetBlock)(output, input)
-    # computes the output given the input
-end
+inputs(hb::HetBlock) = hb.inputs
+outputs(hb::HetBlock) = hb.outputs
 
+# ===== Functions for the fake news algorithm =====
+# ===== Step 1 =====
 function get_diffs!(
-    diffs, dx, T,
+    diffs, dx,
     xss, vss, dss, yss, pss,
     ha
 )   
@@ -41,13 +41,13 @@ function get_diffs!(
 
     # ===== Computation =====
     # For s=0, the inputs are shocked but next period value will be steady-state
-    ha.p!(p, v, dx, cache)            # update the policy
-    ha.y!(y, p, dx, cache)            # outcome based on new policy
-    ha.Λ!(view(diffs, dindices, 0), dss, p, cache)       # how the distribution reacts
-    mul!(view(diffs, yindices, 0), transpose(y), d)     # how the aggregate outcome reacts
-    ha.v!(v, v, dx, cache)            # finally iterate the value function
-    for s in 1:T-1                      # now iterate backwards
-        ha.p!(p, v, xss, cache)              # now back to steady-state x
+    ha.p!(p, v, dx, cache) # update the policy
+    ha.y!(y, p, dx, cache) # outcome based on new policy
+    ha.Λ!(view(diffs, dindices, 0), dss, p, cache) # how the distribution reacts
+    mul!(view(diffs, yindices, 0), transpose(y), d) # how the aggregate outcome reacts
+    ha.v!(v, v, dx, cache) # finally iterate the value function
+    for s in 1:ha.T-1  # now iterate backwards
+        ha.p!(p, v, xss, cache) # now back to steady-state x
         ha.y!(y, p, xss, cache)
         ha.Λ!(view(diffs, dindices, s), dss, p, cache)
         mul!(view(diffs, yindices, s), transpose(y), d)
@@ -57,19 +57,19 @@ function get_diffs!(
 end
 
 function get_derivs(
-    T, xss, vss, dss, yss, pss, ha
+    xss, vss, dss, yss, pss, ha
 )   
     diffs = OffsetArray(
-        zeros(size(yss, 2) + length(dss), T), 0, -1
+        zeros(size(yss, 2) + length(dss), ha.T), 0, -1
     )
     raw_res = ForwardDiff.jacobian(
-        (y, dx) -> get_diffs!(y, dx, T, xss, vss, dss, yss, pss, ha), diffs, xss
+        (y, dx) -> get_diffs!(y, dx, xss, vss, dss, yss, pss, ha), diffs, xss
     ) 
 
-    reshape(raw_res, size(yss, 2) + length(dss), T, length(xss))
-
+    reshape(raw_res, size(yss, 2) + length(dss), ha.T, length(xss))
 end
 
+# ===== Step 2 =====
 function updatecurlyE!(Es, T, output_index, Λss, yss)
     Es[0] .= yss[:, output_index]
     for i in 1:T-1
@@ -77,6 +77,7 @@ function updatecurlyE!(Es, T, output_index, Λss, yss)
     end
 end
 
+# ===== Step 3 =====
 function updateF!(F, T, Es, Ys, Ds)
     for s in 1:T
         # First row
@@ -89,6 +90,7 @@ function updateF!(F, T, Es, Ys, Ds)
     return F
 end
 
+# ===== Step 4 =====
 function updateJ!(J, F, T)
     # first row and column is just copied from F
     # i allow for general indices as J may be a section of a larger Jacobian
@@ -105,71 +107,35 @@ function updateJ!(J, F, T)
     return J
 end
 
-function jacobian(hb::HetBlock, T, xss, vss, dss, yss, pss, Λss)
+# ===== full fake news algorithm =====
+
+function jacobian(ha::HetBlock, xss, vss, dss, yss, pss, Λss)
 
     derivs = get_derivs(
-        T, xss, vss, dss, yss, pss, hb
+        xss, vss, dss, yss, pss, ha
     )
 
     dindices = axes(dss, 1)
     yindices = (length(dss)+1):size(derivs, 1)
 
-    Es = OffsetArray([zeros(axes(dss)) for t in 0:T-1], -1)
-    F = zeros(T, T)
-    J = zeros(T * size(yss, 2), T * length(xss))
+    Es = OffsetArray([zeros(axes(dss)) for t in 0:ha.T-1], -1)
+    F = zeros(ha.T, ha.T)
 
-    rloc = 1
-    for output_index in axes(yss, 2)
-        updatecurlyE!(Es, T, output_index, Λss, yss)
-        cloc = 1
-        for input_index in eachindex(xss)
+    res = Dict(
+        (ha.inputs[i], ha.outputs[o]) => zeros(ha.T, ha.T)
+        for o in eachindex(ha.outputs), i in eachindex(ha.inputs)
+    )
+
+    for output_index in eachindex(ha.outputs)
+        updatecurlyE!(Es, ha.T, output_index, Λss, yss)
+        for input_index in eachindex(ha.inputs)
             Ds = view(derivs, dindices, :, input_index)
             Ys = view(derivs, yindices[output_index], :, input_index)
-            # section of the jacobian to update
-            Jchunk = view(J, rloc:rloc+T-1, cloc:cloc+T-1)
-            updateF!(F, T, Es, Ys, Ds)
-            updateJ!(Jchunk, F, T)
-            cloc += T
+            updateF!(F, ha.T, Es, Ys, Ds)
+            updateJ!(res[(ha.inputs[input_index], ha.outputs[output_index])], F, ha.T)
         end
-        rloc += T
     end
-    return J
-end
-    
-# ===== Example and testing =====
 
-include("fakenews.jl")
+    return res
 
-function ks_makecache(S, params)
-    β, Qt, kgrid, zgrid = params
-    nk = size(kgrid, 1)
-    nz = size(zgrid, 1)
-    (   zeros(S, nk, nz),
-        zeros(S, nk, nz),
-        zeros(S, nk, nz),
-        zeros(S, nk, nz)
-    )
-end
-
-haBlock = HetBlock(
-    # v!
-    (vc, vf, x, cache) -> _iterate_value!(vc, vf, x, params, cache),
-    # p!
-    (p, v, x, cache) -> _update_policy!(p, v, x, params, cache, kinds),
-    # Λ!
-    (d, dp, p, cache) -> _apply_transition!(d, p, dp, params, cache),
-    # y!
-    (y, p, x, cache) -> _update_outcomes!(y, p, x, params, cache, kinds),
-    # makecache
-    S -> ks_makecache(S, params)
-)
-
-# get_derivs(300, xss, vss, dss, yss, pss, haBlock)
-# J = jacobian(haBlock, 300, xss, vss, dss, yss, pss, Λss)
-
-function plot_sec(o, i)
-    oindices = ((o-1) * 300 + 1):((o-1) * 300 + T)
-    iindices = ((i-1) * 300 + 1):((i-1) * 300 + T)
-    subJ = J[oindices, iindices]
-    subJ[:, 1 .+ [0, 25, 50, 75, 100]] |> plot
 end
