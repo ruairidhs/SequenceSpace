@@ -41,6 +41,15 @@ using Interpolations # for fastinterp
             # Regression test against previous result (which is visually similar to paper)
             @test j[(:r, :𝓀)] ≈ readdlm("../tempdata/jrk.csv", ',', Float64)
         end
+
+        @testset "Graphs" begin
+            vars = [:z, :k, :w, :r, :𝓀, :c, :h]
+            blocks = [haBlock, firms_block, eq_block]
+            steady_states = [(xss, vss, dss, yss, pss, Λss), ([kss, zss],), ([kss, kss],)]
+            mg = ModelGraph(vars, blocks, steady_states)
+            # Regression test against previous result (which is visually similar to paper)
+            @test (- (getH(:k, :h, mg) \ getH(:z, :h, mg))) ≈ readdlm("../tempdata/ksG.csv", ',', Float64)
+        end
         
     end
 

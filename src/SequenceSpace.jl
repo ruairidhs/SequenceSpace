@@ -10,6 +10,9 @@ using SparseArrays
 using SparseDiffTools
 using SparsityDetection
 
+using LightGraphs
+using GraphPlot
+
 export Block,
        inputs,
        outputs,
@@ -17,9 +20,11 @@ export Block,
        jacobian,
        SparseBlock,
        HetBlock,
+       ModelGraph,
+       plotgraph,
+       getH!,
+       getH,
        fastinterp!
-
-# maybe some consts?
 
 include("fastinterp.jl")
 
@@ -27,9 +32,11 @@ include("fastinterp.jl")
 #   - inputs
 #   - outputs
 #   - jacobian
+#   - getT
 abstract type Block end
 
 include("sparseblocks.jl")
 include("hetblocks.jl")
+include("graphs.jl")
 
 end # module
