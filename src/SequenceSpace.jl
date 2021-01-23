@@ -13,6 +13,7 @@ using SparsityDetection
 export Block,
        inputs,
        outputs,
+       getT,
        jacobian,
        SparseBlock,
        HetBlock,

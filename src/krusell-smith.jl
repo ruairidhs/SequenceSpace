@@ -1,5 +1,15 @@
-# Code for replicating the paper's Krusell-Smith example
+using SequenceSpace
 
+using DelimitedFiles
+using Interpolations
+using LinearAlgebra
+using SparseArrays
+using OffsetArrays
+
+# absolute file path in case this file is evaluated from multiple locations
+fp = "/Users/ruairidh/.julia/dev/SequenceSpace/"
+
+# Code for replicating the paper's Krusell-Smith example
 const T = 300
 
 # ===== Firms block =====
@@ -30,13 +40,15 @@ function firms!(output, input, k0)
     return output
 end
 
+firms_block = SparseBlock([:k, :z], [:r, :w], (o, i) -> firms!(o, i, kss), T)
+
 # ===== Het agents block =====
 # Set up to match paper
-raw_agrid = readdlm("../tempdata/a_grid.csv", ',', Float64)
-raw_pi    = readdlm("../tempdata/Pi.csv", ',', Float64)
-raw_egrid = readdlm("../tempdata/e_grid.csv", ',', Float64)
-raw_Va    = readdlm("../tempdata/Va.csv", ',', Float64)
-raw_rwb   = readdlm("../tempdata/rwb.csv", ',', Float64)
+raw_agrid = readdlm(fp * "tempdata/a_grid.csv", ',', Float64)
+raw_pi    = readdlm(fp * "tempdata/Pi.csv", ',', Float64)
+raw_egrid = readdlm(fp * "tempdata/e_grid.csv", ',', Float64)
+raw_Va    = readdlm(fp * "tempdata/Va.csv", ',', Float64)
+raw_rwb   = readdlm(fp * "tempdata/rwb.csv", ',', Float64)
 
 const γ = 1.0
 # up(c) = c^(-γ)
@@ -319,7 +331,7 @@ function ks_makecache(S, params)
         zeros(S, nk, nz)
     )
 end
-#=
+
 haBlock = HetBlock(
     [:r, :w], [:𝓀, :c], T,
     (vc, vf, x, cache) -> _iterate_value!(vc, vf, x, params, cache),
@@ -328,4 +340,12 @@ haBlock = HetBlock(
     (y, p, x, cache)   -> _update_outcomes!(y, p, x, params, cache, kinds),
     S                  -> ks_makecache(S, params)
 )
-=#
+
+# ===== Equilibrium block =====
+
+function market_clearing!(output, input)
+    # inputs: [:𝓀, :k]
+    # outputs: [:h]
+    output[:, 1] .= input[:, 1] .- input[:, 2]
+end
+eq_block = SparseBlock([:𝓀, :k], [:h], market_clearing!, T)

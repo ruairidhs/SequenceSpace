@@ -36,8 +36,11 @@ end
 
 inputs(sb::SparseBlock)  = sb.inputs
 outputs(sb::SparseBlock) = sb.outputs
+getT(sb::SparseBlock) = sb.T
 
-function jacobian(sb::SparseBlock, input_vals)
+function jacobian(sb::SparseBlock, steady_state)
+
+    input_vals, = steady_state
 
     # Updates the full Jacobian (all inputs and outputs)
     # Then splits it into a separate matrix for each input, output pair

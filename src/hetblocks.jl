@@ -15,6 +15,7 @@ end
 
 inputs(hb::HetBlock) = hb.inputs
 outputs(hb::HetBlock) = hb.outputs
+getT(hb::HetBlock) = hb.T
 
 # ===== Functions for the fake news algorithm =====
 # ===== Step 1 =====
@@ -109,7 +110,9 @@ end
 
 # ===== full fake news algorithm =====
 
-function jacobian(ha::HetBlock, xss, vss, dss, yss, pss, Λss)
+function jacobian(ha::HetBlock, steady_state)
+
+    xss, vss, dss, yss, pss, Λss = steady_state
 
     derivs = get_derivs(
         xss, vss, dss, yss, pss, ha
