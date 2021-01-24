@@ -22,8 +22,8 @@ export Block,
        HetBlock,
        ModelGraph,
        plotgraph,
-       getH!,
-       getH,
+       makeG,
+       generaleqJacobians,
        fastinterp!
 
 include("fastinterp.jl")
