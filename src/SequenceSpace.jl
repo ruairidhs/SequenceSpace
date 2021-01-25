@@ -2,6 +2,7 @@ module SequenceSpace
 
 
 using ForwardDiff
+using FFTW
 using LinearAlgebra
 using OffsetArrays
 
@@ -24,7 +25,13 @@ export Block,
        plotgraph,
        makeG,
        generaleqJacobians,
-       fastinterp!
+       fastinterp!,
+       fastcov,
+       makefftcache,
+       makeinput,
+       updateMAcoefficients!,
+       makeV,
+       _likelihood
 
 include("fastinterp.jl")
 
@@ -38,5 +45,7 @@ abstract type Block end
 include("sparseblocks.jl")
 include("hetblocks.jl")
 include("graphs.jl")
+
+include("likelihood.jl")
 
 end # module

@@ -20,27 +20,30 @@ const zss = 1.0
 
 getr(k, z) = α * z * k^(α-1.0) - δ
 getw(k, z) = (1.0-α) * z * k^α
+gety(k, z) = z * k^α
 
 function firms!(output, input, k0)
 
     # inputs: k, z
-    # outputs: r, w
+    # outputs: r, w, y
 
     T = size(input, 1)
 
     output[1, 1] = getr(k0, input[1, 2])
     output[1, 2] = getw(k0, input[1, 2])
+    output[1, 3] = gety(k0, input[1, 2])
 
     for t in 2:T
         k, z = input[t-1, 1], input[t, 2]
         output[t, 1] = getr(k, z)
         output[t, 2] = getw(k, z)
+        output[t, 3] = gety(k, z)
     end
 
     return output
 end
 
-firms_block = SparseBlock([:k, :z], [:r, :w], (o, i) -> firms!(o, i, kss), T)
+firms_block = SparseBlock([:k, :z], [:r, :w, :y], (o, i) -> firms!(o, i, kss), T)
 
 # ===== Het agents block =====
 # Set up to match paper
@@ -332,7 +335,7 @@ function ks_makecache(S, params)
     )
 end
 
-haBlock = HetBlock(
+ha_block = HetBlock(
     [:r, :w], [:𝓀, :c], T,
     (vc, vf, x, cache) -> _iterate_value!(vc, vf, x, params, cache),
     (p, v, x, cache)   -> _update_policy!(p, v, x, params, cache, kinds),
@@ -349,3 +352,10 @@ function market_clearing!(output, input)
     output[:, 1] .= input[:, 1] .- input[:, 2]
 end
 eq_block = SparseBlock([:𝓀, :k], [:h], market_clearing!, T)
+
+# ===== Set up the model graph =====
+
+blocks = [ha_block, firms_block, eq_block]
+steady_states = [(xss, vss, dss, yss, pss, Λss), ([kss, zss],), ([kss, kss],)]
+mg = ModelGraph(blocks, steady_states, [:k], [:z], [:h])
+Gs = generaleqJacobians(makeG(mg), mg)

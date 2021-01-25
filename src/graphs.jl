@@ -67,7 +67,6 @@ function resetnodematrices!(mg::ModelGraph)
     end
 end
 
-
 function forward_accumulate!(start, mg::ModelGraph)
 
     # set starting node to identity
