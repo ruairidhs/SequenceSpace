@@ -42,7 +42,7 @@ function jacobian(ha::HetBlock)
     dindices = axes(dss, 1)
     yindices = (length(dss)+1):size(derivs, 1)
 
-    Es = [zeros(axes(dss)) for t in 1:ha.T]
+    Es = zeros(size(dss, 1), ha.T-1) #[zeros(axes(dss)) for t in 1:ha.T]
     F  = zeros(ha.T, ha.T)
 
     allJ = Dict(
@@ -69,7 +69,7 @@ function jacobian(ha::HetBlock)
 end
 
 # ===== Step 1: get 𝒟 and 𝒴 =====
-function get_diffs!(diffs, dx, xss, vss, dss, ha)
+function get_diffs!(diffs, dx, inputindex, xss, vss, dss, ha)
 
     # ===== Set up =====
     S = eltype(dx)
@@ -79,10 +79,12 @@ function get_diffs!(diffs, dx, xss, vss, dss, ha)
 
     Y = zeros(S, size(dss, 1), length(yindices))
     v = convert(Array{S}, vss)
+    x = convert(Array{S}, xss)
+    x[inputindex] += dx
 
     # ===== Computation =====
     # shock at s=0
-    ha.iterate_block!(v, Y, view(diffs, dindices, 1), dss, dx, tmps)
+    ha.iterate_block!(v, Y, view(diffs, dindices, 1), dss, x, tmps)
     mul!(view(diffs, yindices, 1), transpose(Y), dss) # (implement eq 12)
     # back to steady state inputs for rest (but v has changed)
     for s in 2:ha.T
@@ -95,33 +97,42 @@ end
 function get_derivs(xss, vss, dss, ha)
 
     diffs = zeros(size(vss, 1) * size(vss, 2) + length(ha.outputs), ha.T)
-    raw_res = ForwardDiff.jacobian(
-        (y, dx) -> get_diffs!(y, dx, xss, vss, dss, ha), 
-        diffs, xss
-    )
+    res   = zeros((size(vss, 1) * size(vss, 2) + 2) * ha.T, length(xss))
+    Threads.@threads for inputindex in axes(xss, 1)
+        ForwardDiff.derivative!(
+            view(res, :, inputindex),
+            (y, dx) -> get_diffs!(y, dx, inputindex, xss, vss, dss, ha), 
+            diffs, 0.0
+        )
+    end
     # Reshapes the Jacobian to 3 dimensions:
     #  (1) values of 𝒟 and 𝒴 (last #outputs elements)
     #  (2) s (0:T-1)
     #  (3) input
-    reshape(raw_res, length(ha.outputs) + length(dss), ha.T, length(xss))
+    reshape(res, length(ha.outputs) + length(dss), ha.T, length(xss))
 end
 
 # ===== Step 2: get ℰ =====
 function updatecurlyE!(Es, T, outputindex, Λss, yss)
-    Es[1] .= yss[:, outputindex]
-    for i in 2:T
-        mul!(Es[i], Λss, Es[i-1])
+    Es[:, 1] .= view(yss, :, outputindex)
+    for i in 2:T-2
+        @views mul!(Es[:, i], Λss, Es[:, i-1])
     end
 end
 
 # ===== Step 3: make the fake news matrix =====
 function updateF!(F, T, Es, Ds, Ys)
+    F[1, :] .= Ys
+    mul!(view(F, 2:T, :), transpose(Es), Ds)
+    #=
     for s in 1:T
         F[1, s] = Ys[s]
         for t in 2:T
-            F[t, s] = transpose(Es[t-1]) * Ds[:, s]
+            # F[t, s] = @views dot(Es[:, t-1], Ds[:, s])
+            # F[t, s] = transpose(Es[t-1]) * Ds[:, s]
         end
     end
+    =#
     return F
 end
 
