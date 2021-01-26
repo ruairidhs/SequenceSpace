@@ -8,13 +8,15 @@ struct ModelGraph
     vars::Vector{Symbol}       # vertex labels
     varDict::Dict{Symbol, Int} # mapping between var and vertex index
 
+    blocks::Vector{Block} # list of blocks in the model
+
     unknowns::Vector{Symbol} # list of symbols representing unknowns
     exog::Vector{Symbol}     # list of symbols representing exogenous variables
     eqvars::Vector{Symbol}   # list of symbols representing equilibrium conditions == 0
 
     graph::SimpleDiGraph{Int64}       # graph representing the input-output structure
-    vJ::Dict{Symbol, Matrix{Float64}} # vertex matrices
-    eJ::Dict{Tuple{Symbol, Symbol}, Matrix{Float64}} # edge matrices
+    vJ::Dict{Symbol, AbstractMatrix{Float64}} # vertex matrices
+    eJ::Dict{Tuple{Symbol, Symbol}, AbstractMatrix{Float64}} # edge matrices
     
     T::Int64 # Matrix dimension
 
@@ -36,22 +38,39 @@ function makegraph(vars, blocks)
     return g
 end
 
-function ModelGraph(blocks, steady_states, unknowns, exog, eqvars)
-    # Calculates the partial jacobians, so takes time!
+function ModelGraph(blocks, unknowns, exog, eqvars)
+
+    # does not compute the jacobians, just initializes them
 
     T = getT(blocks[1])
     vars = union([vcat(inputs(block), outputs(block)) for block in blocks]...)
+    g = makegraph(vars, blocks)
 
     @assert length(unknowns) == length(eqvars) # needed for invertibility
     @assert all([getT(block) == T for block in blocks]) # check all Ts are the same
 
+    eJ = Dict{Tuple{Symbol, Symbol}, AbstractMatrix{Float64}}()
+    for block in blocks
+        for inp in inputs(block), outp in outputs(block)
+            if typeof(block) == HetBlock
+                # hetblock -> dense matrix
+                push!(eJ, (inp, outp) => zeros(T, T))
+            elseif typeof(block) == SparseBlock
+                push!(eJ, (inp, outp) => spzeros(T, T))
+            else
+                error("Unsupported block type")
+            end
+        end
+    end
+
     ModelGraph(
         vars,
         Dict(vars[i] => i for i in eachindex(vars)),
+        blocks,
         unknowns, exog, eqvars,
-        makegraph(vars, blocks),
+        g,
         Dict(v => zeros(T, T) for v in vars),
-        merge((jacobian(blocks[i], steady_states[i]) for i in eachindex(blocks))...),
+        eJ,
         T
     )
 
@@ -59,6 +78,25 @@ end
 
 # ===== Methods for ModelGraphs =====
 plotgraph(mg::ModelGraph) = gplot(mg.graph, nodelabel = mg.vars)
+
+function updatesteadystate!(mg::ModelGraph, new_steadystate)
+    # new_steadystate is a vector containing new steady state values
+    # in the same order as the blocks in mg.block
+    @assert length(mg.blocks) == length(new_steadystate)
+    for (block, xss) in zip(mg.blocks, new_steadystate)
+        updatesteadystate!(block, xss)
+    end
+
+end
+
+function updatepartialJacobians!(mg::ModelGraph)
+    for block in mg.blocks
+        j = jacobian(block)
+        for inp in inputs(block), outp in outputs(block)
+            mg.eJ[(inp, outp)] .= j[(inp, outp)]
+        end
+    end
+end
 
 function resetnodematrices!(mg::ModelGraph)
     # Resets all node matrices to zero

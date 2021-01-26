@@ -21,7 +21,9 @@ export Block,
        jacobian,
        SparseBlock,
        HetBlock,
+       updatesteadystate!,
        ModelGraph,
+       updatepartialJacobians!,
        plotgraph,
        makeG,
        generaleqJacobians,
@@ -32,7 +34,7 @@ export Block,
        updateMAcoefficients!,
        makeV,
        _likelihood
-
+       
 include("fastinterp.jl")
 
 # Each subtype must implement the following methods:

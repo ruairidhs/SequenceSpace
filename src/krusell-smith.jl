@@ -1,37 +1,317 @@
 using SequenceSpace
 
 using DelimitedFiles
-using Interpolations
 using LinearAlgebra
 using SparseArrays
-using OffsetArrays
 
 # absolute file path in case this file is evaluated from multiple locations
 fp = "/Users/ruairidh/.julia/dev/SequenceSpace/"
 
-# Code for replicating the paper's Krusell-Smith example
 const T = 300
 
-# ===== Firms block =====
+#region Household block =====
+
+# ===== Set up parameters =====
+
+const agrid = readdlm(fp * "tempdata/paper_ks/a_grid.csv", ',', Float64)[:, 1]
+const egrid = readdlm(fp * "tempdata/paper_ks/e_grid.csv", ',', Float64)[:, 1]
+const Qt = readdlm(fp * "tempdata/paper_ks/Pi.csv", ',', Float64) |> permutedims
+
+rwb = readdlm(fp * "tempdata/paper_ks/rwb.csv", ',', Float64)
+const β = rwb[3]
+rss, wss = rwb[1], rwb[2]
+
+# ===== Iteration functions =====
+function updateEGMvars!(vars, vf, r, wage)
+
+    W, c, a₋, = vars # doesn't affect tmp1
+
+    # Set W
+    mul!(W, vf, β .* Qt)
+    # Set c
+    c .= 1.0 ./ W
+    # Set a₋
+    for ei in axes(egrid, 1)
+        a₋[:, ei] .= (agrid .+ view(c, :, ei) .- (wage * egrid[ei])) ./ (1.0 + r)
+    end
+    return vars
+
+end
+
+function inner_update_outcomes!(Y, a₋, c, r, w) 
+
+    na = size(agrid, 1)
+    # fill first column with a, second with c
+    loc = 1
+    for ei in axes(egrid, 1)
+        @views fastinterp!(Y[loc:loc+na-1, 1], agrid, a₋[:, ei], agrid)
+        @views fastinterp!(Y[loc:loc+na-1, 2], agrid, a₋[:, ei], c[:, ei])
+        loc += na
+    end
+
+    # reset any constrained agents:
+    #   - for assets, set to lower bound
+    #   - for consumption, set to: (1+rₜ)a₋ + wₜe
+    mina, na = first(agrid), size(agrid, 1)
+    for ei in axes(egrid, 1)
+        for ai in axes(agrid, 1)
+            loc = (ei - 1) * na + ai
+            if Y[loc, 1] >= mina
+                break # monotonicity, skips to next ei 
+            else
+                Y[loc, 1] = mina
+                Y[loc, 2] = (1.0+r)*agrid[ai] + w * egrid[ei]
+            end
+        end
+    end
+end
+
+function inner_iterate_distribution!(d, d0, a₋, tmp1, tmp2)
+
+    # d is filled with next period distribution, d0 is current distribution
+    # tmp1 and tmp2 are caches that will be overwritten
+
+    # fill each column of tmp1 with the mass for a′ and e
+    fill!(tmp1, 0)
+    loc = 1
+    for ei in axes(egrid, 1)
+        @views fastinterp!(tmp2[:, ei], agrid, a₋[:, ei], axes(agrid, 1))
+
+        # set constrained to index 1 
+        for ai in axes(agrid, 1)
+            if tmp2[ai, ei] >= 1
+                break
+            else
+                tmp2[ai, ei] = 1
+            end
+        end
+
+        for ai in axes(agrid, 1)
+            mass = d0[loc]
+            la   = floor(Int, tmp2[ai, ei]) # index of asset grid point one below exact policy
+            ω    = tmp2[ai, ei] - la
+            if la < length(agrid) # i.e. they are not constrained at the top
+                tmp1[la, ei]   += mass * (1-ω)
+                tmp1[la+1, ei] += mass * ω
+            else
+                tmp1[la, ei]   += mass
+            end
+            loc += 1
+        end
+    end
+
+    # finally apply exogenous transition to get a′ and e′
+    mul!(tmp2, tmp1, transpose(Qt)) # i.e. tmp2 = tmp1 * Q
+    for i in eachindex(d)
+        d[i] = tmp2[i] # can't multiply directly into d as it is wrong shape
+    end
+    return d
+end
+
+function constructΛ(a₋, tmp2)
+    # not efficient, but is not called frequently
+    # Λ is used to construct curlyEs in fake news, 
+    # but not to iterate the distribution
+    Λt = zeros(length(agrid) * length(egrid), length(agrid) * length(egrid))
+    na = length(agrid)
+
+    loc = 1
+    for ei in eachindex(egrid)
+        @views fastinterp!(tmp2[:, ei], agrid, a₋[:, ei], axes(agrid, 1))
+
+        # set constrained to index 1 
+        for ai in axes(agrid, 1)
+            if tmp2[ai, ei] >= 1
+                break
+            else
+                tmp2[ai, ei] = 1
+            end
+        end
+
+        for ai in eachindex(agrid)
+            la   = floor(Int, tmp2[ai, ei])
+            ω    = tmp2[ai, ei] - la
+            if la < length(agrid)
+                for ei′ in eachindex(egrid)
+                    Λt[la+(ei′-1)*na, loc]   = (1-ω) * Qt[ei′, ei]
+                    Λt[la+1+(ei′-1)*na, loc] = ω * Qt[ei′, ei]
+                end
+            else
+                for ei′ in eachindex(egrid)
+                    Λt[la+(ei′-1)*na, loc] = Qt[ei′, ei]
+                end
+            end
+            loc += 1
+        end
+    end
+
+    return sparse(transpose(Λt))
+
+end
+
+function constrained_value(r, w, z, k, kmin)
+    (1+r) / (
+        (1+r) * k + (w * z) - kmin
+    )
+end
+
+function inner_backwards_iterate!(v, a₋, W, r, w)
+
+    # directly overwrites v with the new value function
+    for ei in axes(v, 2)
+        @views fastinterp!(v[:, ei], agrid, a₋[:, ei], (1.0 + r) .* W[:, ei])
+        # need to correct the extrapolation for constrained agents
+        amin = a₋[1, ei]
+        for ai in eachindex(agrid)
+            if agrid[ai] >= amin
+                break # monotonicity => can stop checking
+            else # they are constrained
+                v[ai, ei] = constrained_value(
+                    r, w, egrid[ei], agrid[ai], agrid[1]
+                )
+            end
+        end
+    end
+
+end
+
+function combined_evaluation!(vf, Y, d, d0, xt, tmps)
+    # given x_t and v_(t+1), calculates outcomes (a & c), forward
+    # iterates the distribution and backwards iterates v without 
+    # redundant computation
+
+    r, w = xt[1], xt[2]
+    updateEGMvars!(tmps, vf, r, w)
+    W, c, a₋, tmp1 = tmps
+
+    inner_update_outcomes!(Y, a₋, c, r, w)
+    inner_iterate_distribution!(d, d0, a₋, c, tmp1)
+    inner_backwards_iterate!(vf, a₋, W, r, w)
+
+end
+
+function makecache(S)
+    (   zeros(S, size(agrid, 1), size(egrid, 1)),
+        zeros(S, size(agrid, 1), size(egrid, 1)),
+        zeros(S, size(agrid, 1), size(egrid, 1)),
+        zeros(S, size(agrid, 1), size(egrid, 1))
+    )
+end
+
+# ===== Steady state finders =====
+
+function supnorm(x, y)
+    maximum(abs.(x .- y))
+end
+
+function steady_state_value(initv, xss; maxiter=1000, tol=1e-8)
+
+    #v = [1 / (a+0.001) for a in agrid, e in egrid]
+    v = initv
+    holder = copy(v)
+    err = 0
+
+    tmps = makecache(Float64)
+
+    r, w = xss[1], xss[2]
+
+    for iter in 1:maxiter
+        updateEGMvars!(tmps, v, r, w)
+        inner_backwards_iterate!(v, tmps[3], tmps[1], r, w)
+        err = supnorm(v, holder)
+        if err < tol
+            return (value=v, converged=true, iter=iter, err=err)
+        else
+            copy!(holder, v)
+        end
+    end
+    return (value=v, converged=false, iter=maxiter, err=err)
+end
+
+function steady_state_distribution(initd, xss, vss; maxiter=2000, tol=1e-8)
+
+    # d = ones(length(agrid) * length(egrid)) / (length(agrid) * length(egrid))
+    d = initd
+    holder = copy(d)
+
+    tmps = makecache(Float64)
+
+    r, w = xss[1], xss[2]
+    updateEGMvars!(tmps, vss, r, w)
+    tmp1, tmp2, a₋, = tmps
+
+    for iter in 1:maxiter
+        inner_iterate_distribution!(d, d, a₋, tmp1, tmp2)
+        err = supnorm(d, holder)
+        if err < tol
+            return (value=d, converged=true, iter=iter, err=err)
+        else
+            copy!(holder, d)
+        end
+    end
+    return (value=d, converged=false, iter=maxiter, err=err)
+end
+
+function _updatesteadystate!(ha, x; updateΛss=true) 
+
+      res_value = steady_state_value(ha.vss, x)
+      @assert res_value.converged
+
+      res_dist = steady_state_distribution(ha.dss, x, res_value.value)
+      @assert res_dist.converged
+
+      tmps = makecache(Float64)
+      updateEGMvars!(tmps, res_value.value, x[1], x[2])
+      W, c, a₋, tmp1 = tmps
+
+      ha.xss .= x
+      ha.vss .= res_value.value
+      ha.dss .= res_dist.value
+      inner_update_outcomes!(ha.yss, a₋, c, x[1], x[2])
+
+      if updateΛss # this is slow so can turn off if not needed
+          ha.Λss .= constructΛ(a₋, tmp1)
+      end
+
+end
+
+ha_block = HetBlock(
+      [:r, :w], [:𝓀, :c], T,
+      combined_evaluation!,
+      makecache,
+      [rss, wss], 
+      [1 / (a+0.001) for a in agrid, e in egrid],
+      ones(length(agrid) * length(egrid)) / (length(agrid) * length(egrid)),
+      spzeros(length(agrid) * length(egrid), length(agrid) * length(egrid)),
+      zeros(length(agrid) * length(egrid), 2), # 2 for two outputs,
+      _updatesteadystate!
+)
+
+updatesteadystate!(ha_block, [rss, wss])
+
+#endregion
+
+#region Firms Block =====
+
 const δ = 0.025
 const α = 0.11
-const kss = 3.14
-const zss = 1.0
+
+kss, zss = 3.14, 1.0
 
 getr(k, z) = α * z * k^(α-1.0) - δ
 getw(k, z) = (1.0-α) * z * k^α
 gety(k, z) = z * k^α
 
-function firms!(output, input, k0)
+function firms!(output, input, xss)
 
     # inputs: k, z
     # outputs: r, w, y
 
     T = size(input, 1)
 
-    output[1, 1] = getr(k0, input[1, 2])
-    output[1, 2] = getw(k0, input[1, 2])
-    output[1, 3] = gety(k0, input[1, 2])
+    output[1, 1] = getr(xss[1], input[1, 2])
+    output[1, 2] = getw(xss[1], input[1, 2])
+    output[1, 3] = gety(xss[1], input[1, 2])
 
     for t in 2:T
         k, z = input[t-1, 1], input[t, 2]
@@ -43,319 +323,31 @@ function firms!(output, input, k0)
     return output
 end
 
-firms_block = SparseBlock([:k, :z], [:r, :w, :y], (o, i) -> firms!(o, i, kss), T)
-
-# ===== Het agents block =====
-# Set up to match paper
-raw_agrid = readdlm(fp * "tempdata/a_grid.csv", ',', Float64)
-raw_pi    = readdlm(fp * "tempdata/Pi.csv", ',', Float64)
-raw_egrid = readdlm(fp * "tempdata/e_grid.csv", ',', Float64)
-raw_Va    = readdlm(fp * "tempdata/Va.csv", ',', Float64)
-raw_rwb   = readdlm(fp * "tempdata/rwb.csv", ',', Float64)
-
-const γ = 1.0
-# up(c) = c^(-γ)
-# upinv(u) = u^(-1/γ)
-up(c) = 1 / c
-upinv(u) = 1 / u
-
-const kgrid = raw_agrid[:,1]
-const zgrid = raw_egrid[:,1]
-const Qt    = permutedims(raw_pi)
-
-const r = raw_rwb[1]
-const w = raw_rwb[2]
-const β = raw_rwb[3]
-
-const kinds = reshape(
-    repeat(1:length(kgrid), length(zgrid)), length(kgrid), length(zgrid)
-)
-const kitp = extrapolate(interpolate(kgrid, BSpline(Linear())), Flat())
-
-const xss = [r, w]
-
-params = (β, Qt, kgrid, zgrid)
-
-
-function constrained_value(r, w, z, k, kmin)
-    (1+r) * up(
-        (1+r) * k + (w * z) - kmin
-    )
-end
-
-function _iterate_value!(vc, vf, xt, params, tmps)
-
-    r, w = xt[1], xt[2]
-    β, Qt, kgrid, zgrid = params
-    tmp1, tmp2, tmp3, tmp4 = tmps
-
-    mul!(tmp1, vf, β .* Qt) # Expectation of future value
-    tmp2 .= (1+r) .* tmp1  # Values
-    tmp3 .= upinv.(tmp1)   # Actions
-
-      for zi in eachindex(zgrid)
-            tmp4[:, zi] .= ( kgrid .+ view(tmp3, :, zi) .- (w * zgrid[zi]) ) ./
-                  (1+r) # Nodes
-            fastinterp!(view(vc, :, zi), kgrid, view(tmp4, :, zi), view(tmp2, :, zi))
-            kmin = tmp4[1, zi]
-            for ki in eachindex(kgrid)
-                  if kgrid[ki] < kmin
-                        vc[ki, zi] = constrained_value(
-                              r, w, zgrid[zi], kgrid[ki], kgrid[1]
-                        )
-                  end
-            end
-      end
-      return vc
-end
-
-function _update_policy!(p, v, xt, params, tmps, kinds)
-
-      r, w = xt[1], xt[2]
-      β, Qt, kgrid, zgrid = params
-      tmp1, tmp2, tmp3, tmp4 = tmps
-
-      mul!(tmp1, v, β .* Qt) # Compute expectation of future value
-      tmp3 .= upinv.(tmp1)   # Actions
-
-      for zi in eachindex(zgrid)
-            tmp4[:, zi] = ( kgrid .+ view(tmp3, :, zi) .- (w * zgrid[zi]) ) ./
-                     (1+r) # Nodes
-            fastinterp!(view(p, :, zi), kgrid, view(tmp4, :, zi), view(kinds, :, zi))
-      end
-      # Change to flat extrapolation
-      nk = length(kgrid)
-      for i in eachindex(p)
-            if p[i] < 1
-                  p[i] = 1
-            elseif p[i] > nk
-                  p[i] = nk
-            end
-      end
-      return p
-end
-
-function _make_transition(pc, params, RCV)
-
-      β, Qt, kgrid, zgrid = params
-      Rs, Cs, Vs = RCV
-
-      nk = length(kgrid)
-      nz = length(zgrid)
-
-      for zi in eachindex(zgrid)
-
-          loc = 1
-          for ki in eachindex(kgrid) # each original k
-
-              kpol = pc[ki, zi] # real-valued index in kgrid
-              lk   = floor(Int, kpol) # integer index of k below
-              ω    = kpol % 1
-
-              if lk < nk # if there is room above
-                  Rs[loc:loc+1, 1, zi] .= ki
-                  Cs[loc, 1, zi]        = lk
-                  Cs[loc+1, 1, zi]      = lk + 1
-                  Vs[loc, 1, zi]        = 1 - ω
-                  Vs[loc+1, 1, zi]      = ω
-              else
-                  Rs[loc, 1, zi]   = ki
-                  Cs[loc, 1, zi]   = lk
-                  Vs[loc, 1, zi]   = 1 # place all mass on lower point
-                  Rs[loc+1, 1, zi] = 1 # this doesn't matter, just need to enter something
-                  Cs[loc+1, 1, zi] = 1 # ''
-                  Vs[loc+1, 1, zi] = 0 # ''
-              end
-              loc += 2
-          end # ki
-          # Now compose for z'
-          for ziprime in 2:nz
-              Rs[:, ziprime, zi] .= Rs[:, 1, zi]
-              # Columns need to be shifted along
-              Cs[:, ziprime, zi] .= Cs[:, 1, zi] .+ ((ziprime - 1) * nk)
-              # Values need to be multiplied by probabilities
-              Vs[:, ziprime, zi] .= Vs[:, 1, zi] .* Qt[ziprime, zi]
-          end
-          # Also need to change the values for the first column
-          Vs[:, 1, zi] .*= Qt[1, zi]
-          # And finally shift the row indices down
-          Rs[:, :, zi] .+= ((zi - 1) * nk)
-      end # zi
-
-      return sparse(vec(Rs), vec(Cs), vec(Vs), nk * nz, nk * nz)
-end
-
-function _apply_transition!(d, p, dp, params, tmps)
-      β, Qt, kgrid, zgrid = params
-      tmp1, tmp2, tmp3, tmp4 = tmps
-      nk = length(kgrid)
-
-      fill!(tmp1, 0)
-
-      # Fill tmp1 so that each column contains the endogenous next capital
-      # distribution from each starting exogenous capital
-      loc = 1
-      for zi in eachindex(zgrid)
-            for ki in eachindex(kgrid)
-                  mass = dp[loc]
-                  kpol = p[ki, zi]
-                  lk   = floor(Int, kpol)
-                  ω    = kpol - lk
-                  if lk < nk # there is room above
-                        tmp1[lk,   zi] += mass * (1 - ω)
-                        tmp1[lk+1, zi] += mass * ω
-                  else # at the upper boundary
-                        tmp1[nk, zi] += mass
-                  end
-                  loc += 1
-            end
-      end
-      mul!(tmp2, tmp1, transpose(Qt))
-      for i in eachindex(d)
-            d[i] = tmp2[i]
-      end
-end
-
-function _update_outcomes!(y, policy, xt, params, tmps, kinds)
-
-      r, w = xt[1], xt[2]
-      β, Qt, kgrid, zgrid = params
-      tmp1, tmp2, tmp3, tmp4 = tmps
-
-      for zi in eachindex(zgrid)
-            # updates capital demand into tmp1
-            fastinterp!(
-                  view(tmp1, :, zi), view(policy, :, zi),
-                  view(kinds, :, zi), kgrid
-            )
-            for ki in eachindex(kgrid)
-                  # update consumption into tmp2
-                  tmp2[ki, zi] = (1 + r) * kgrid[ki] + w * zgrid[zi] - tmp1[ki, zi]
-            end
-      end
-
-      y[:, 1] .= vec(tmp1)
-      y[:, 2] .= vec(tmp2)
-end
-
-# ===== Compute steady-state values =====
-function supnorm(x, y)
-    maximum(abs.(x .- y))
-end
-
-function steady_state_value(xt, params; maxiter = 1000, tol=1e-8)
-
-      β, Qt, kgrid, zgrid = params
-
-      vc = [1 / (k+0.001) for k in kgrid, z in zgrid]
-      holder = copy(vc)
-      err = 0
-
-      tmps = (
-            zeros(Float64, length(kgrid), length(zgrid)),
-            zeros(Float64, length(kgrid), length(zgrid)),
-            zeros(Float64, length(kgrid), length(zgrid)),
-            zeros(Float64, length(kgrid), length(zgrid))
-      )
-
-      for iter in 1:maxiter
-            _iterate_value!(vc, vc, xt, params, tmps)
-            err = supnorm(vc, holder)
-            if err < tol
-                  return (value=vc, converged=true, iter=iter, err=err)
-            else
-                  copy!(holder, vc)
-            end
-      end
-      return (value=vc, converged=false, iter=iter, err=err)
-end
-
-function steady_state_distribution(v, xt, params, kinds; maxiter = 2000, tol=1e-8)
-
-      β, Qt, kgrid, zgrid = params
-      tmps = (
-            zeros(Float64, length(kgrid), length(zgrid)),
-            zeros(Float64, length(kgrid), length(zgrid)),
-            zeros(Float64, length(kgrid), length(zgrid)),
-            zeros(Float64, length(kgrid), length(zgrid))
-      )
-
-      nk, nz = length(kgrid), length(zgrid)
-      Rs = Array{Int}(undef, 2*nk, nz, nz)
-      RCV  = (Rs, similar(Rs), similar(Rs, Float64))
-
-      d0 = vec(ones(length(kgrid), length(zgrid)) ./
-          (length(kgrid) * length(zgrid)))
-      holder = copy(d0)
-      err = 0
-
-      policy = similar(v)
-      _update_policy!(policy, v, xt, params, tmps, kinds)
-      Λss = _make_transition(policy, params, RCV)
-
-      for iter in 1:maxiter
-          d0 .= transpose(Λss) * d0
-          err = supnorm(d0, holder)
-          if err < tol
-              return (value=d0, converged=true, iter=iter, err=err)
-          else
-              copy!(holder, d0)
-          end
-      end
-      return (value=d0, converged=false, iter=maxiter, err=err)
-end
-
-vss = steady_state_value(xss, params; maxiter = 1000, tol=1e-8).value
-dss = steady_state_distribution(vss, xss, params, kinds; maxiter = 2000, tol=1e-8).value
-
-nk, nz = length(kgrid), length(zgrid)
-tmp = (
-            zeros(nk, nz),
-            zeros(nk, nz),
-            zeros(nk, nz),
-            zeros(nk, nz)
-      )
-Rs = Array{Int}(undef, 2*nk, nz, nz)
-RCV  = (Rs, similar(Rs), similar(Rs, Float64))
-pss = similar(vss)
-_update_policy!(pss, vss, xss, params, tmp, kinds)
-Λss = _make_transition(pss, params, RCV)
-
-yss = zeros(nk * nz, 2)
-_update_outcomes!(yss, pss, xss, params, tmp, kinds)
-
-function ks_makecache(S, params)
-    β, Qt, kgrid, zgrid = params
-    nk = size(kgrid, 1)
-    nz = size(zgrid, 1)
-    (   zeros(S, nk, nz),
-        zeros(S, nk, nz),
-        zeros(S, nk, nz),
-        zeros(S, nk, nz)
-    )
-end
-
-ha_block = HetBlock(
-    [:r, :w], [:𝓀, :c], T,
-    (vc, vf, x, cache) -> _iterate_value!(vc, vf, x, params, cache),
-    (p, v, x, cache)   -> _update_policy!(p, v, x, params, cache, kinds),
-    (d, dp, p, cache)  -> _apply_transition!(d, p, dp, params, cache),
-    (y, p, x, cache)   -> _update_outcomes!(y, p, x, params, cache, kinds),
-    S                  -> ks_makecache(S, params)
+firms_block = SparseBlock(
+    [:k, :z], [:r, :w, :y], [kss, zss], firms!, T
 )
 
-# ===== Equilibrium block =====
+#endregion
 
-function market_clearing!(output, input)
-    # inputs: [:𝓀, :k]
+#region Equilibrium block =====
+
+function market_clearing!(output, input, xss)
+    # inputs: [:𝓀, :k], does not depend on steady-state
     # outputs: [:h]
-    output[:, 1] .= input[:, 1] .- input[:, 2]
+    # output[:, 1] .= input[:, 1] .- input[:, 2]
+    for i in axes(output, 1)
+      output[i, 1] = input[i, 1] - input[i, 2]
+    end
 end
-eq_block = SparseBlock([:𝓀, :k], [:h], market_clearing!, T)
+eq_block = SparseBlock([:𝓀, :k], [:h], [0.0, 0.0], market_clearing!, T)
 
-# ===== Set up the model graph =====
+#endregion
+
+#region make Model graph =====
 
 blocks = [ha_block, firms_block, eq_block]
-steady_states = [(xss, vss, dss, yss, pss, Λss), ([kss, zss],), ([kss, kss],)]
-mg = ModelGraph(blocks, steady_states, [:k], [:z], [:h])
+mg = ModelGraph(blocks, [:k], [:z], [:h])
+updatepartialJacobians!(mg)
 Gs = generaleqJacobians(makeG(mg), mg)
+
+#endregion

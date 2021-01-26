@@ -28,7 +28,7 @@ using Interpolations # for fastinterp
         include("../src/krusell-smith.jl") # includes required packages
 
         @testset "Sparse Block" begin
-            j = jacobian(firms_block, ([kss, zss],))
+            j = jacobian(firms_block)
             # Compare to analytic result
             @test Matrix(j[(:z, :r)]) ≈ diagm(repeat([α * kss^(α-1)], T))
             @test Matrix(j[(:z, :w)]) ≈ diagm(repeat([(1-α)*kss^α], T))
@@ -37,14 +37,14 @@ using Interpolations # for fastinterp
         end
 
         @testset "Het Agents Block" begin
-            j = jacobian(ha_block, (xss, vss, dss, yss, pss, Λss))
-            # Regression test against previous result (which is visually similar to paper)
-            @test j[(:r, :𝓀)] ≈ readdlm("../tempdata/jrk.csv", ',', Float64)
+            j = jacobian(ha_block)
+            # Regression test against previous result (which is same as paper)
+            @test j[(:r, :𝓀)] ≈ readdlm("../tempdata/ks_regression/jrk.csv", ',', Float64)
         end
-
+        
         @testset "Graphs" begin
             # Regression test
-            @test makeG(mg) ≈ readdlm("../tempdata/ksG.csv", ',', Float64)
+            @test makeG(mg) ≈ readdlm("../tempdata/ks_regression/ksG.csv", ',', Float64)
         end
         
     end
