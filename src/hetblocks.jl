@@ -115,7 +115,7 @@ end
 # ===== Step 2: get ℰ =====
 function updatecurlyE!(Es, T, outputindex, Λss, yss)
     Es[:, 1] .= view(yss, :, outputindex)
-    for i in 2:T-2
+    for i in 2:T-1
         @views mul!(Es[:, i], Λss, Es[:, i-1])
     end
 end
