@@ -27,13 +27,13 @@ using Interpolations # for fastinterp
 
         include("../src/krusell-smith.jl") # includes required packages
 
-        @testset "Sparse Block" begin
+        @testset "Simple Block" begin
             j = jacobian(firms_block)
-            # Compare to analytic result
-            @test Matrix(j[(:z, :r)]) ≈ diagm(repeat([α * kss^(α-1)], T))
-            @test Matrix(j[(:z, :w)]) ≈ diagm(repeat([(1-α)*kss^α], T))
-            @test Matrix(j[(:k, :r)]) ≈ diagm(-1 => repeat([α*(α-1)*zss*kss^(α-2)], T-1))
-            @test Matrix(j[(:k, :w)]) ≈ diagm(-1 => repeat([α*(1-α)*zss*kss^(α-1)], T-1))
+            # Compare to analytic result 
+            @test Matrix(SequenceSpace.sparse(j[(:z, :r)], T)) ≈ diagm(repeat([α * kss^(α-1)], T))
+            @test Matrix(SequenceSpace.sparse(j[(:z, :w)], T)) ≈ diagm(repeat([(1-α)*kss^α], T))
+            @test Matrix(SequenceSpace.sparse(j[(:k, :r)], T)) ≈ diagm(-1 => repeat([α*(α-1)*zss*kss^(α-2)], T-1))
+            @test Matrix(SequenceSpace.sparse(j[(:k, :w)], T)) ≈ diagm(-1 => repeat([α*(1-α)*zss*kss^(α-1)], T-1))
         end
 
         @testset "Het Agents Block" begin

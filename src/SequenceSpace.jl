@@ -20,7 +20,8 @@ export Block,
        outputs,
        getT,
        jacobian,
-       SparseBlock,
+       SimpleBlock,
+       @simpleblock,
        HetBlock,
        updatesteadystate!,
        ModelGraph,
@@ -45,7 +46,7 @@ include("fastinterp.jl")
 #   - getT
 abstract type Block end
 
-include("sparseblocks.jl")
+include("shiftblocks.jl")
 include("hetblocks.jl")
 include("graphs.jl")
 

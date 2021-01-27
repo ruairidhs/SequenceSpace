@@ -1,8 +1,4 @@
 
-using LinearAlgebra
-using SparseArrays
-using ForwardDiff
-
 import LinearAlgebra: mul!
 import Base: *, +
 import SparseArrays: sparse
@@ -19,6 +15,13 @@ end
 shiftprod(a::Pair{Int, Float64}, b::Pair{Int, Float64}) = (a[1] + b[1], a[2] * b[2])
 *(a::Pair{Int, Float64}, B::ShiftMatrix) = ShiftMatrix(Dict(shiftprod(a, b) for b in pairs(B.shifts)))
 *(A::ShiftMatrix, B::ShiftMatrix) = mapreduce(a -> a * B, +, pairs(A.shifts))
+
+function shiftidentity()
+    return ShiftMatrix(Dict(0 => 1.0))
+end
+function shiftzero()
+    return ShiftMatrix(Dict(0 => 0.0))
+end
 
 function sparse(A::ShiftMatrix, T)
     # creates a square sparse matrix of dimensions T * T
@@ -126,10 +129,12 @@ end
 # mul!(C, A, B, α, β) -> C = A * B * α + C * β
 # C::Matrix
 function mul!(C::Matrix, A::ShiftMatrix, B::Matrix, α::Float64, β::Float64)
-    _noresetvshift!(β .* C, α * A, B)
+    _noresetvshift!(C, α * A, B)
+    C .*= β
 end
 function mul!(C::Matrix, A::Matrix, B::ShiftMatrix, α::Float64, β::Float64)
-    _noresethshift!(β .* C, α * B, A)
+    _noresethshift!(C, α * B, A)
+    C .*= β
 end
 function mul!(C::Matrix, A::ShiftMatrix, B::ShiftMatrix, α::Float64, β::Float64)
     C .= β .* C + (α * A * B)
@@ -196,7 +201,7 @@ end
 
 function shiftfunc(syms, funcexpr)
     # shifts the indices of all vars in syms
-    rhs = funcexpr.args[2]
+    rhs = funcexpr.args[1].args[2]
     minmaxs = Tuple{Int, Int}[]
     for i in eachindex(syms)
         push!(minmaxs, shift_to_one!(rhs, syms[i]))
@@ -204,7 +209,7 @@ function shiftfunc(syms, funcexpr)
     return funcexpr, minmaxs
 end
 
-struct SimpleBlock
+struct SimpleBlock <: Block
 
     inputs::Vector{Symbol}
     outputs::Vector{Symbol}
@@ -213,31 +218,33 @@ struct SimpleBlock
 
     minmaxs::Vector{Tuple{Int, Int}}
     arglengths::Vector{Int}
-    fvecargs::Function
 
 end
 
 SimpleBlock(inputs, outputs, f, xss, minmaxs) = SimpleBlock(
     inputs, outputs, f, xss, minmaxs,
-    [p[2] - p[1] + 1 for p in minmaxs],
-    v -> f(v...)
+    [p[2] - p[1] + 1 for p in minmaxs]
 )
 
 macro simpleblock(inputs, outputs, xss, f)
     # create a simple block with correctly shifter indices
-    shifted_func_expr, minmaxs = shiftfunc(eval(inputs), f)
-    return SimpleBlock(
-        eval(inputs),
-        eval(outputs),
-        eval(shifted_func_expr),
-        eval(xss),
-        minmaxs
-    )
+    shifted_func_expr, minmaxs = shiftfunc(eval(inputs), esc(f))
+    return :(SimpleBlock(
+        $inputs,
+        $(esc(outputs)),
+        $shifted_func_expr,
+        $(esc(xss)),
+        $minmaxs
+    ))
 end
+
+inputs(sb::SimpleBlock)  = sb.inputs
+outputs(sb::SimpleBlock) = sb.outputs
+updatesteadystate!(sb::SimpleBlock, new_xss) = (sb.xss .= new_xss)
 
 # now get the jacobian
 
-function jacobian(sb::SimpleBlock, input_index)
+function _jacobian(sb::SimpleBlock, input_index)
     
     raw_jac = ForwardDiff.jacobian(
         x -> (args=[
@@ -259,7 +266,7 @@ function toshiftmat(v, min_index)
 end
 
 function jacobian(sb::SimpleBlock)
-    merge((jacobian(sb, i) for i in eachindex(sb.inputs))...)
+    merge((_jacobian(sb, i) for i in eachindex(sb.inputs))...)
 end
 
 #endregion

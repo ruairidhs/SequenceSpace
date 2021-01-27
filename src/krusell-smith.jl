@@ -295,55 +295,24 @@ updatesteadystate!(ha_block, [rss, wss])
 
 #endregion
 
-#region Firms Block =====
+#region Simple blocks =====
 
 const δ = 0.025
 const α = 0.11
 
 kss, zss = 3.14, 1.0
 
-getr(k, z) = α * z * k^(α-1.0) - δ
-getw(k, z) = (1.0-α) * z * k^α
-gety(k, z) = z * k^α
-
-function firms!(output, input, xss)
-
-    # inputs: k, z
-    # outputs: r, w, y
-
-    T = size(input, 1)
-
-    output[1, 1] = getr(xss[1], input[1, 2])
-    output[1, 2] = getw(xss[1], input[1, 2])
-    output[1, 3] = gety(xss[1], input[1, 2])
-
-    for t in 2:T
-      k, z = input[t-1, 1], input[t, 2]
-      output[t, 1] = getr(k, z)
-      output[t, 2] = getw(k, z)
-      output[t, 3] = gety(k, z)
-    end
-
-    return output
+firms_block = @simpleblock [:k, :z] [:r, :w, :y] [kss, zss] firms(k, z) = begin
+  r = α * z[0] * k[-1]^(α-1) - δ
+  w = (1-α) * z[0] * k[-1]^α
+  y = z[0] * k[-1]^α
+  return [r, w, y]
 end
 
-firms_block = SparseBlock(
-    [:k, :z], [:r, :w, :y], [kss, zss], firms!, T
-)
-
-#endregion
-
-#region Equilibrium block =====
-
-function market_clearing!(output, input, xss)
-    # inputs: [:𝓀, :k], does not depend on steady-state
-    # outputs: [:h]
-    # output[:, 1] .= input[:, 1] .- input[:, 2]
-    for i in axes(output, 1)
-    output[i, 1] = input[i, 1] - input[i, 2]
-    end
+eq_block = @simpleblock [:𝓀, :k] [:h] [0.0, 0.0] target(𝓀, k) = begin
+  h = 𝓀[0] - k[0]
+  return [h]
 end
-eq_block = SparseBlock([:𝓀, :k], [:h], [0.0, 0.0], market_clearing!, T)
 
 #endregion
 
@@ -353,13 +322,5 @@ blocks = [ha_block, firms_block, eq_block]
 mg = ModelGraph(blocks, [:k], [:z], [:h])
 updatepartialJacobians!(mg)
 Gs = generaleqJacobians(makeG(mg), mg)
-
-function profileaccumulator!(n, mg)
-  for i in 1:n
-    SequenceSpace.resetnodematrices!(mg)
-    SequenceSpace.forward_accumulate!(:z, mg)
-  end
-end
-
 
 #endregion

@@ -14,9 +14,9 @@ struct ModelGraph
     exog::Vector{Symbol}     # list of symbols representing exogenous variables
     eqvars::Vector{Symbol}   # list of symbols representing equilibrium conditions == 0
 
-    graph::SimpleDiGraph{Int64}       # graph representing the input-output structure
-    vJ::Dict{Symbol, AbstractMatrix{Float64}} # vertex matrices
-    eJ::Dict{Tuple{Symbol, Symbol}, AbstractMatrix{Float64}} # edge matrices
+    graph::SimpleDiGraph{Int64} # graph representing the input-output structure
+    vJ::Dict{Symbol, Union{Matrix{Float64}, ShiftMatrix}} # vertex matrices
+    eJ::Dict{Tuple{Symbol, Symbol}, Union{Matrix{Float64}, ShiftMatrix}} # edge matrices
     
     T::Int64 # Matrix dimension
 
@@ -47,16 +47,15 @@ function ModelGraph(blocks, unknowns, exog, eqvars)
     g = makegraph(vars, blocks)
 
     @assert length(unknowns) == length(eqvars) # needed for invertibility
-    @assert all([getT(block) == T for block in blocks]) # check all Ts are the same
 
-    eJ = Dict{Tuple{Symbol, Symbol}, AbstractMatrix{Float64}}()
+    eJ = Dict{Tuple{Symbol, Symbol}, Union{Matrix{Float64}, ShiftMatrix}}()
     for block in blocks
         for inp in inputs(block), outp in outputs(block)
             if typeof(block) == HetBlock
                 # hetblock -> dense matrix
                 push!(eJ, (inp, outp) => zeros(T, T))
-            elseif typeof(block) == SparseBlock
-                push!(eJ, (inp, outp) => spzeros(T, T))
+            elseif typeof(block) == SimpleBlock
+                push!(eJ, (inp, outp) => shiftzero())
             else
                 error("Unsupported block type")
             end
@@ -93,7 +92,11 @@ function updatepartialJacobians!(mg::ModelGraph)
     for block in mg.blocks
         j = jacobian(block)
         for inp in inputs(block), outp in outputs(block)
-            mg.eJ[(inp, outp)] .= j[(inp, outp)]
+            if typeof(block) == SimpleBlock
+                mg.eJ[(inp, outp)] = j[(inp, outp)] # simple blocks overwrite
+            else
+                mg.eJ[(inp, outp)] .= j[(inp, outp)]
+            end
         end
     end
 end
