@@ -3,6 +3,7 @@ using SequenceSpace
 using DelimitedFiles
 using LinearAlgebra
 using SparseArrays
+using StaticArrays
 
 # absolute file path in case this file is evaluated from multiple locations
 fp = "/Users/ruairidh/.julia/dev/SequenceSpace/"
@@ -14,8 +15,11 @@ const T = 300
 # ===== Set up parameters =====
 
 const agrid = readdlm(fp * "tempdata/paper_ks/a_grid.csv", ',', Float64)[:, 1]
-const egrid = readdlm(fp * "tempdata/paper_ks/e_grid.csv", ',', Float64)[:, 1]
-const Qt = readdlm(fp * "tempdata/paper_ks/Pi.csv", ',', Float64) |> permutedims
+egrid_raw   = readdlm(fp * "tempdata/paper_ks/e_grid.csv", ',', Float64)[:, 1]
+const egrid = SVector{length(egrid_raw)}(egrid_raw)
+
+Qt_raw = readdlm(fp * "tempdata/paper_ks/Pi.csv", ',', Float64) |> permutedims
+const Qt = SMatrix{size(Qt_raw, 1), size(Qt_raw, 2)}(Qt_raw)
 
 rwb = readdlm(fp * "tempdata/paper_ks/rwb.csv", ',', Float64)
 const β = rwb[3]
@@ -279,7 +283,7 @@ ha_block = HetBlock(
     [:r, :w], [:𝓀, :c], T,
     combined_evaluation!,
     makecache,
-    [rss, wss], 
+    [rss, wss],
     [1 / (a+0.001) for a in agrid, e in egrid],
     ones(length(agrid) * length(egrid)) / (length(agrid) * length(egrid)),
     spzeros(length(agrid) * length(egrid), length(agrid) * length(egrid)),
@@ -349,5 +353,13 @@ blocks = [ha_block, firms_block, eq_block]
 mg = ModelGraph(blocks, [:k], [:z], [:h])
 updatepartialJacobians!(mg)
 Gs = generaleqJacobians(makeG(mg), mg)
+
+function profileaccumulator!(n, mg)
+  for i in 1:n
+    SequenceSpace.resetnodematrices!(mg)
+    SequenceSpace.forward_accumulate!(:z, mg)
+  end
+end
+
 
 #endregion

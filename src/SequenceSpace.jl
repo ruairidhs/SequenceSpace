@@ -8,6 +8,7 @@ using OffsetArrays
 
 # Used in sparseblocks.jl
 using SparseArrays
+using StaticArrays
 using SparseDiffTools
 using SparsityDetection
 
