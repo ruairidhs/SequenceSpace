@@ -1,17 +1,17 @@
 module SequenceSpace
 
-
 using ForwardDiff
 using FFTW
 using LinearAlgebra
-using OffsetArrays
 using LoopVectorization
+
+# using OffsetArrays
 
 # Used in sparseblocks.jl
 using SparseArrays
 using StaticArrays
-using SparseDiffTools
-using SparsityDetection
+# using SparseDiffTools
+# using SparsityDetection
 
 using LightGraphs
 using GraphPlot
@@ -19,17 +19,16 @@ using GraphPlot
 export Block,
        inputs,
        outputs,
-       getT,
        jacobian,
        SimpleBlock,
        @simpleblock,
        HetBlock,
        updatesteadystate!,
        ModelGraph,
-       updatepartialJacobians!,
        plotgraph,
-       makeG,
-       generaleqJacobians,
+       updatepartialJacobians!,
+       geneqjacobians,
+       geneqjacobians!,
        fastinterp!,
        fastcov,
        makefftcache,

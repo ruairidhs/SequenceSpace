@@ -48,14 +48,6 @@ end
 # Define addition of shift + dense = (shift * I) + dense
 # currently only implmented for square matrices
 
-# mark 1
-# function +(A::Matrix, S::ShiftMatrix)
-#    @assert size(A, 1) == size(A, 2)
-#    A + sparse(S, size(A, 1))
-#end
-#+(S::ShiftMatrix, A::Matrix) = A + S
-
-# mark 2
 function add!(C::Matrix, shifter::Pair{Int, Float64})
     shift, scale = shifter
     if shift >= 0
@@ -157,91 +149,78 @@ mul!(C::ShiftMatrix, A::ShiftMatrix, B::ShiftMatrix, α::Float64, β::Float64) =
 # mutating to dense is very expensive as you need to build the whole dense matrix, so i don't use it
 mul!(C::ShiftMatrix, A, B, α::Float64, β::Float64) = error("Can't mutate shift matrix to dense matrix")
 
+#endregion
+
 #region Functions for getting shift matrix from simple block =====
 
-function get_indices!(refs, obj::Expr, sym)
-    if obj.head == :ref
-        if obj.args[1] == sym
-            push!(refs, obj.args[2])
-        end
-    elseif (obj.head == :call) || (obj.head == :block) || (obj.head == :(=))
-        for subobj in obj.args
-            get_indices!(refs, subobj, sym)
-        end
-    end
-end
-
-function get_indices!(refs, obj, sym)
-    nothing
-end
-
-function shift_indices!(obj::Expr, sym, shift)
-    # Shifts all indexes into sym by shift
-    if obj.head == :ref
-        if obj.args[1] == sym
-            obj.args[2] += shift
-        end
-    elseif (obj.head == :call) || (obj.head == :block) || (obj.head == :(=))
-        for subobj in obj.args
-            shift_indices!(subobj, sym, shift)
-        end
-    end
-end
-
-function shift_indices!(obj, sym, shift)
-    nothing
-end
-
-function shift_to_one!(ex, sym)
-    # resets indexes into sym so they start at one
-    # returns the original min index
-    refs = Set{Int}([])
-    get_indices!(refs, ex, sym)
-    if isempty(refs)
-        error("No references to $sym in $ex")
-    else
-        minmax = (minimum(refs), maximum(refs))
-    end
-    shift_indices!(ex, sym, -minmax[1] + 1)
-    return minmax
-end
-
-function shiftfunc(syms, funcexpr)
-    # shifts the indices of all vars in syms
-    rhs = funcexpr.args[1].args[2]
-    minmaxs = Tuple{Int, Int}[]
-    for i in eachindex(syms)
-        push!(minmaxs, shift_to_one!(rhs, syms[i]))
-    end
-    return funcexpr, minmaxs
-end
-
-struct SimpleBlock <: Block
+struct SimpleBlock <: Block
 
     inputs::Vector{Symbol}
     outputs::Vector{Symbol}
-    f::Function # shifted
     xss::Vector{Float64}
-
+    f::Function # shifted
     minmaxs::Vector{Tuple{Int, Int}}
     arglengths::Vector{Int}
 
 end
 
-SimpleBlock(inputs, outputs, f, xss, minmaxs) = SimpleBlock(
-    inputs, outputs, f, xss, minmaxs,
+SimpleBlock(inputs, outputs, xss, f, minmaxs) = SimpleBlock(
+    inputs, outputs, xss, f, minmaxs,
     [p[2] - p[1] + 1 for p in minmaxs]
 )
 
-macro simpleblock(inputs, outputs, xss, f)
-    # create a simple block with correctly shifter indices
-    shifted_func_expr, minmaxs = shiftfunc(eval(inputs), esc(f))
+# Implement the @simpleblock macro to automatically shift function arguments
+function searchrefs(f, exp::Expr, sym)
+    # Finds all reference expressions and applies f to them
+    # if sym = :x, then this finds e.g. x[3]
+    if exp.head == :ref && exp.args[1] == sym 
+        f(exp)
+    else
+        for subobject in exp.args
+            searchrefs(f, subobject, sym)
+        end
+    end
+end
+function searchrefs(f, obj, sym)
+    return nothing
+end
+
+function find_indices(obj, sym)
+    pile = Set{Int}()
+    searchrefs(ref -> push!(pile, ref.args[2]), obj, sym)
+    return pile
+end
+
+function shiftindices(exp::Expr, sym, shift)
+    searchrefs(ref -> ref.args[2] += shift, exp, sym)
+    return exp
+end
+
+function getfunctionargs(exp::Expr)
+    @assert exp.head == :-> "Must provide anonymous function!"
+    if typeof(exp.args[1]) == Symbol
+        return [exp.args[1]] # single argument function
+    else 
+        return exp.args[1].args # multi-argument function
+    end
+end
+
+macro simpleblock(inputs, outputs, xss, funcdef)
+    # funcdef must be anonymous function!
+    # need to escape the function definition to capture any variables
+    # in definition scope
+    args = getfunctionargs(esc(funcdef).args[1])
+    minmaxs = Tuple{Int, Int}[]
+    for arg in args
+        inds = find_indices(esc(funcdef), arg)
+        @assert !isempty(inds) "Function must depend on arguments!"
+        extremes = extrema(inds)
+        push!(minmaxs, extremes)
+        # shift indices so they start at 1
+        shiftindices(esc(funcdef), arg, 1 - extremes[1])
+    end
     return :(SimpleBlock(
-        $inputs,
-        $(esc(outputs)),
-        $shifted_func_expr,
-        $(esc(xss)),
-        $minmaxs
+        $(esc(inputs)), $(esc(outputs)), $(esc(xss)), $(esc(funcdef)), $minmaxs
     ))
 end
 

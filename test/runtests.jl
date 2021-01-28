@@ -44,7 +44,16 @@ using Interpolations # for fastinterp
         
         @testset "Graphs" begin
             # Regression test
-            @test makeG(mg) ≈ readdlm("../tempdata/ks_regression/ksG.csv", ',', Float64)
+            nt, nu, nx = length(mg.eqvars), length(mg.unknowns), length(mg.exog)
+            Hu, Hx, G = zeros(mg.T * nt, mg.T * nu), zeros(mg.T * nt, mg.T * nx), zeros(mg.T * nu, mg.T * nx)
+            SequenceSpace.fillG!(G, Hu, Hx, mg, Val(:forward))
+            oldG = readdlm("../tempdata/ks_regression/ksG.csv", ',', Float64)
+            @test G ≈ oldG
+            # check that backwards mode gives same result
+            SequenceSpace.resetnodematrices!(mg, [:h])
+            fill!(G, 0)
+            SequenceSpace.fillG!(G, Hu, Hx, mg, Val(:backward))
+            @test G ≈ oldG
         end
         
     end

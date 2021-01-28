@@ -300,19 +300,16 @@ updatesteadystate!(ha_block, [rss, wss])
 const δ = 0.025
 const α = 0.11
 
-kss, zss = 3.14, 1.0
+kss, zss = 3.142857142865353, 0.8816460975214567
 
-firms_block = @simpleblock [:k, :z] [:r, :w, :y] [kss, zss] firms(k, z) = begin
+firms_block = @simpleblock [:k, :z] [:r, :w, :y] [kss, zss] (k, z) -> begin
   r = α * z[0] * k[-1]^(α-1) - δ
   w = (1-α) * z[0] * k[-1]^α
   y = z[0] * k[-1]^α
   return [r, w, y]
 end
 
-eq_block = @simpleblock [:𝓀, :k] [:h] [0.0, 0.0] target(𝓀, k) = begin
-  h = 𝓀[0] - k[0]
-  return [h]
-end
+eq_block = @simpleblock [:𝓀, :k] [:h] [0.0, 0.0] (𝓀, k) -> [𝓀[0] - k[0]]
 
 #endregion
 
@@ -321,7 +318,9 @@ end
 blocks = [ha_block, firms_block, eq_block]
 mg = ModelGraph(blocks, [:k], [:z], [:h], [:k, :z, :y, :r, :w])
 updatepartialJacobians!(mg)
-Gs = generaleqJacobians(makeG(mg), mg)
+Gs = geneqjacobians(mg, Val(:forward))
+
+# Gs = generaleqJacobians(makeG(mg), mg)
 
 #=
 g_forward = makeG(mg)
@@ -349,6 +348,10 @@ function profileJacob(n, mg)
   end
 end
 =#
-
-
+#=
+Gkzpaper = readdlm("tempdata/ks_regression/Gkz.csv", ',', Float64)
+Grzpaper = readdlm("tempdata/ks_regression/Grz.csv", ',', Float64)
+Jhakr    = readdlm("tempdata/ks_regression/Jhakr.csv", ',', Float64)
+Jhakw    = readdlm("tempdata/ks_regression/Jhakw.csv", ',', Float64)
+=#
 #endregion
