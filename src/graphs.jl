@@ -38,7 +38,7 @@ function makegraph(vars, blocks)
     return g
 end
 
-function ModelGraph(blocks, unknowns, exog, eqvars)
+function ModelGraph(blocks, unknowns, exog, eqvars, simplenodes)
 
     # does not compute the jacobians, just initializes them
 
@@ -68,7 +68,8 @@ function ModelGraph(blocks, unknowns, exog, eqvars)
         blocks,
         unknowns, exog, eqvars,
         g,
-        Dict(v => zeros(T, T) for v in vars),
+        Dict(v => (v ∈ simplenodes ? shiftzero() : zeros(T, T)) for v in vars),
+        # Dict(v => zeros(T, T) for v in vars),
         eJ,
         T
     )
@@ -103,15 +104,26 @@ end
 
 function resetnodematrices!(mg::ModelGraph)
     # Resets all node matrices to zero
-    for v in mg.vars
-        fill!(mg.vJ[v], 0)
+    for (vi, mat) in pairs(mg.vJ)
+        if typeof(mat) == ShiftMatrix
+            mg.vJ[vi] = shiftzero()
+        else
+            fill!(mat, 0)
+        end
     end
+    #for v in mg.vars
+    #    fill!(mg.vJ[v], 0)
+    #end
 end
 
 function forward_accumulate!(start, mg::ModelGraph)
 
     # set starting node to identity
-    mg.vJ[start] .= I(mg.T)
+    if typeof(mg.vJ[start]) == ShiftMatrix
+        mg.vJ[start] = shiftidentity()
+    else
+        mg.vJ[start] .= I(mg.T)
+    end
 
     # gets the subgraph containing all descendants of start 
     subgraph, indices = induced_subgraph(
@@ -128,6 +140,27 @@ function forward_accumulate!(start, mg::ModelGraph)
     
 end
 
+function backwards_accumulate!(start, mg::ModelGraph)
+    # set starting node to identity
+    if typeof(mg.vJ[start]) == ShiftMatrix
+        mg.vJ[start] = shiftidentity()
+    else
+        mg.vJ[start] .= I(mg.T)
+    end
+
+    subgraph, indices = induced_subgraph(
+        mg.graph, neighborhood(mg.graph, mg.varDict[start], length(mg.vars), dir=:in)
+    )
+    for src in Iterators.reverse(topological_sort_by_dfs(subgraph))
+        srcvar = mg.vars[indices[src]]
+        for dst in inneighbors(subgraph, src)
+            dstvar = mg.vars[indices[dst]]
+            mul!(mg.vJ[dstvar], mg.vJ[srcvar], mg.eJ[dstvar, srcvar], 1.0, 1.0)
+        end
+    end
+
+end
+
 function getJ!(Hu, start, targets, mg)
 
     # Computes total Jacobians for start => targets
@@ -139,10 +172,36 @@ function getJ!(Hu, start, targets, mg)
 
     loc = 1
     for ti in eachindex(targets)
-        Hu[loc:loc+mg.T-1, :] .= mg.vJ[targets[ti]]
+        view(Hu, loc:loc+mg.T-1, :) .= mg.vJ[targets[ti]]
         loc += mg.T
     end
 
+end
+
+function makeG_backwards!(Hu, Hx, mg)
+
+    T  = mg.T
+    nt, nu, nx = length(mg.eqvars), length(mg.unknowns), length(mg.exog)
+    # Hu = zeros(T * nt, T * nu)
+    # Hx = zeros(T * nt, T * nx)
+    
+    loc = 1
+    for ti in eachindex(mg.eqvars)
+        resetnodematrices!(mg)
+        backwards_accumulate!(mg.eqvars[ti], mg)
+        cloc = 1
+        for ui in 1:nu
+            view(Hu, loc:loc+T-1, cloc:cloc+T-1) .= mg.vJ[mg.unknowns[ui]]
+            cloc += T
+        end
+        cloc = 1
+        for xi in 1:nx
+            view(Hx, loc:loc+T-1, cloc:cloc+T-1) .= mg.vJ[mg.exog[xi]]
+            cloc += T
+        end
+        loc += T
+    end
+    # return - Hu \ Hx
 end
 
 function makeH(starts, targets, mg)
@@ -188,3 +247,73 @@ function generaleqJacobians(fullG, mg)
 
     return Gs
 end
+
+function fillH!(H, starts, targets, mg)
+    T, ns, nt = mg.T, length(starts), length(targets)
+    loc = 1
+    for si in eachindex(starts)
+        getJ!(view(H, :, loc:loc+T-1), starts[si], targets, mg)
+    end
+    return H
+end
+
+function updatinggeq_forward!(Gs, bigG, Hu, Hx, mg)
+
+    T = mg.T
+    fillH!(Hu, mg.unknowns, mg.eqvars, mg)
+    fillH!(Hu, mg.exog, mg.eqvars, mg)
+    ldiv!(bigG, lu!(Hu), Hx)
+
+    # for exogenous vars set the relevant cols to identity
+    loc = 1
+    for ei in eachindex(mg.exog)
+        Gs[mg.exog[ei]][:, loc:loc+T-1] .= I(T)
+        loc += T
+    end
+
+    # and then forward accumulate across the whole graph for the rest
+    for src in topological_sort_by_dfs(mg.graph)
+        srcvar = mg.vars[src]
+        for dst in outneighbors(mg.graph, src)
+            dstvar = mg.vars[dst]
+            mul!(Gs[dstvar], mg.eJ[srcvar, dstvar], Gs[srcvar], 1.0, 1.0)
+        end
+    end
+
+    return Gs
+end
+
+function updatinggeq_backward!(Gs, bigG, Hu, Hx, mg)
+
+    # bigG: zeros(T * nu, T * nx)
+    # Hu: zeros(T * nu, T * nu)
+    # Hx: zeros(T * nu, T * nx)
+
+    # Gs = Dict( # initialize
+    #     var => zeros(T, T * length(mg.exog)) for var in mg.vars
+    # )
+
+    T = mg.T
+    makeG_backwards!(Hu, Hx, mg)
+    ldiv!(bigG, lu!(Hu), Hx)
+
+    # for exogenous vars set the relevant cols to identity
+    loc = 1
+    for ei in eachindex(mg.exog)
+        Gs[mg.exog[ei]][:, loc:loc+T-1] .= I(T)
+        loc += T
+    end
+
+    # and then forward accumulate across the whole graph for the rest
+    for src in topological_sort_by_dfs(mg.graph)
+        srcvar = mg.vars[src]
+        for dst in outneighbors(mg.graph, src)
+            dstvar = mg.vars[dst]
+            mul!(Gs[dstvar], mg.eJ[srcvar, dstvar], Gs[srcvar], 1.0, 1.0)
+        end
+    end
+
+    return Gs
+
+end
+

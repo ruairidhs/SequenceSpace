@@ -5,6 +5,7 @@ using ForwardDiff
 using FFTW
 using LinearAlgebra
 using OffsetArrays
+using LoopVectorization
 
 # Used in sparseblocks.jl
 using SparseArrays

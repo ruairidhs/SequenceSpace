@@ -43,112 +43,119 @@ end
 *(α::Float64, B::ShiftMatrix) = ShiftMatrix(Dict(s[1] => α * s[2] for s in pairs(B.shifts)))
 *(B::ShiftMatrix, α::Float64) = α * B
 
-# Now define interaction with normal matrices
-# Define vertical and horizontal shifts
-function vshift!(C, M, shifter::Pair{Int, Float64})
-    n, α = shifter # shift and scale
-    if n == 0
-        C .+= α .* M
-    elseif n > 0 # -> shift up
-        for row in Iterators.drop(axes(M, 1), n)
-            C[row - n, :] .+= α .* view(M, row, :)
-        end
-    else # n < 0 -> shift down
-        for row in Iterators.take(axes(M, 1), size(M, 1) + n)
-            C[row - n, :] .+= α .*  view(M, row, :)
-        end
-    end
-    return C
-end
-
-function hshift!(C, M, shifter::Pair{Int, Float64})
-    n, α = shifter # shift and scale
-    if n == 0
-        C .+= α .* M
-    elseif n > 0 # -> shift right
-        for col in Iterators.take(axes(M, 1), size(M, 1) - n)
-            C[:, col + n] .+= α .* view(M, :, col)
-        end
-    else # n < 0 -> shift left
-        for col in Iterators.drop(axes(M, 1), abs(n))
-            C[:, col + n] .+= α .* view(M, :, col)
-        end
-    end
-    return C
-end
-
-# Define multiplication for shift * dense (vertical shift)
-function _noresetvshift!(C, S, A)
-    # C .= C + S * A
-    for shift in pairs(S.shifts)
-        vshift!(C, A, shift)
-    end
-    return C
-end
-function _noresethshift!(C, S, A)
-    # C .= C + A * S
-    for shift in pairs(S.shifts)
-        hshift!(C, A, shift)
-    end
-    return C
-end
-
-function mul!(C::Matrix, S::ShiftMatrix, A::Matrix)
-    # C .= S * A
-    fill!(C, 0)
-    _noresetvshift!(C, S, A)
-end
-
-function *(S::ShiftMatrix, A::Matrix)
-    C = zeros(axes(A))
-    _noresetvshift!(C, S, A)
-end
-
-# Define multiplication for dense * shift (horizontal shift)
-function mul!(C::Matrix, A::Matrix, S::ShiftMatrix)
-    # C .= A * S
-    fill!(C, 0)
-    _noresethshift!(C, S, A)
-end
-
-function *(A::Matrix, S::ShiftMatrix)
-    C = zeros(axes(A))
-    _noresethshift!(C, S, A)
-end
+# Now define interaction with dense matrices
 
 # Define addition of shift + dense = (shift * I) + dense
-# Works by converting shift -> sparse
 # currently only implmented for square matrices
-function +(A::Matrix, S::ShiftMatrix)
-    @assert size(A, 1) == size(A, 2)
-    A + sparse(S, size(A, 1))
-end
-+(S::ShiftMatrix, A::Matrix) = A + S
 
-# 5 element mul! (used in accumulation)
+# mark 1
+# function +(A::Matrix, S::ShiftMatrix)
+#    @assert size(A, 1) == size(A, 2)
+#    A + sparse(S, size(A, 1))
+#end
+#+(S::ShiftMatrix, A::Matrix) = A + S
+
+# mark 2
+function add!(C::Matrix, shifter::Pair{Int, Float64})
+    shift, scale = shifter
+    if shift >= 0
+        @inbounds for i in shift+1:size(C, 2)
+            C[i-shift, i] += scale
+        end
+    else
+        @inbounds for i in 1:size(C,2)+shift
+            C[i-shift, i] += scale
+        end
+    end
+    return C
+end
+
+function add!(C::Matrix, S::ShiftMatrix)
+    for shifter in pairs(S.shifts)
+        add!(C, shifter)
+    end
+end
+
+# Main application in accumulation is either:
+#    C .= C + A * S or C + S * A
+# implemented by adding method for 5 argument mul!
+# last two arguments are scalars for multiplication, but i don't implement them yet
+# Shift in each direction:
+function addrightshift!(C, A, shifter)
+    shift, scale = shifter
+    if shift >= size(A, 2)
+        return C
+    else
+        @avx view(C, :, shift+1:size(C, 2)) .+= scale .* view(A, :, 1:size(A, 2)-shift)
+        return C
+    end
+end
+function addleftshift!(C, A, shifter)
+    shift, scale = shifter
+    if shift >= size(A, 2)
+        return C
+    else
+        @avx view(C, :, 1:size(C, 2)-shift) .+= scale * view(A, :, shift+1:size(A, 2))
+        return C
+    end
+end
+function addhshift!(C, A, shifter)
+    if shifter[1] >= 0
+        addrightshift!(C, A, shifter)
+    else
+        addleftshift!(C, A, (abs(shifter[1]) => shifter[2]))
+    end
+end
+function addupshift!(C, A, shifter)
+    shift, scale = shifter
+    if shift >= size(A, 1)
+        return C
+    else
+        @avx view(C, 1:size(C,1)-shift, :) .+= scale .* view(A, shift+1:size(A, 1), :)
+        return C
+    end
+end
+function adddownshift!(C, A, shifter)
+    shift, scale = shifter
+    if shift >= size(A, 1)
+        return C
+    else
+        @avx view(C, shift+1:size(C,1), :) .+= scale .* view(A, 1:size(A,1)-shift, :)
+        return C
+    end
+end
+function addvshift!(C, A, shifter)
+    if shifter[1] >= 0
+        addupshift!(C, A, shifter)
+    else
+        adddownshift!(C, A, (abs(shifter[1]) => shifter[2]))
+    end
+end
+
+function leftmuladd!(C, S, A)
+    # ie C .= C + S * A
+    for shift in pairs(S.shifts)
+        addvshift!(C, A, shift)
+    end
+    return C
+end
+function rightmuladd!(C, A, S)
+    # ie C .= C + A * S
+    for shift in pairs(S.shifts)
+        addhshift!(C, A, shift)
+    end
+    return C
+end
+
 # mul!(C, A, B, α, β) -> C = A * B * α + C * β
 # C::Matrix
-function mul!(C::Matrix, A::ShiftMatrix, B::Matrix, α::Float64, β::Float64)
-    _noresetvshift!(C, α * A, B)
-    C .*= β
-end
-function mul!(C::Matrix, A::Matrix, B::ShiftMatrix, α::Float64, β::Float64)
-    _noresethshift!(C, α * B, A)
-    C .*= β
-end
-function mul!(C::Matrix, A::ShiftMatrix, B::ShiftMatrix, α::Float64, β::Float64)
-    C .= β .* C + (α * A * B)
-end
-
+mul!(C::Matrix, A::ShiftMatrix, B::Matrix, α::Float64, β::Float64) = leftmuladd!(C, A, B)
+mul!(C::Matrix, A::Matrix, B::ShiftMatrix, α::Float64, β::Float64) = rightmuladd!(C, A, B)
+mul!(C::Matrix, A::ShiftMatrix, B::ShiftMatrix, α::Float64, β::Float64) = add!(C, A * B)
 # C::ShiftMatrix
-function mul!(C::ShiftMatrix, A::ShiftMatrix, B::ShiftMatrix, α::Float64, β::Float64)
-    mergewith!(+, β * C, α * A * B)
-end
-function mul!(C::ShiftMatrix, A, B, α::Float64, β::Float64)
-    error("Can't mutate shift matrix to dense matrix")
-end
-
-#endregion
+mul!(C::ShiftMatrix, A::ShiftMatrix, B::ShiftMatrix, α::Float64, β::Float64) = mergewith!(+, C.shifts, (A * B).shifts)
+# mutating to dense is very expensive as you need to build the whole dense matrix, so i don't use it
+mul!(C::ShiftMatrix, A, B, α::Float64, β::Float64) = error("Can't mutate shift matrix to dense matrix")
 
 #region Functions for getting shift matrix from simple block =====
 

@@ -319,8 +319,36 @@ end
 #region make Model graph =====
 
 blocks = [ha_block, firms_block, eq_block]
-mg = ModelGraph(blocks, [:k], [:z], [:h])
+mg = ModelGraph(blocks, [:k], [:z], [:h], [:k, :z, :y, :r, :w])
 updatepartialJacobians!(mg)
 Gs = generaleqJacobians(makeG(mg), mg)
+
+#=
+g_forward = makeG(mg)
+g_backward = SequenceSpace.makeG_backwards(mg)
+Gsback = generaleqJacobians(SequenceSpace.makeG_backwards(mg), mg)
+
+@benchmark generaleqJacobians(makeG($mg), $mg)
+@benchmark generaleqJacobians(SequenceSpace.makeG_backwards($mg), $mg)
+
+T = mg.T
+nt, nu, nx = length(mg.eqvars), length(mg.unknowns), length(mg.exog)
+bigG = zeros(T * nu, T * nx)
+Hu = zeros(T * nu, T * nu)
+Hx = zeros(T * nu, T * nx)
+Gs = Dict( # initialize
+  var => zeros(T, T * length(mg.exog)) for var in mg.vars
+)
+
+@benchmark SequenceSpace.updatinggeq_backward!($Gs, $bigG, $Hu, $Hx, $mg)
+@benchmark SequenceSpace.updatinggeq_forward!($Gs, $bigG, $Hu, $Hx, $mg)
+
+function profileJacob(n, mg)
+  for i in 1:n
+    SequenceSpace.updatinggeq_forward!(Gs, bigG, Hu, Hx, mg)
+  end
+end
+=#
+
 
 #endregion
