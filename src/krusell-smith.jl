@@ -215,7 +215,7 @@ function steady_state_value(initv, xss; maxiter=1000, tol=1e-8)
     holder = copy(v)
     err = 0
 
-    tmps = makecache(Float64)
+    tmps = makecache(eltype(xss))
 
     r, w = xss[1], xss[2]
 
@@ -238,7 +238,7 @@ function steady_state_distribution(initd, xss, vss; maxiter=2000, tol=1e-8)
     d = initd
     holder = copy(d)
 
-    tmps = makecache(Float64)
+    tmps = makecache(eltype(xss))
 
     r, w = xss[1], xss[2]
     updateEGMvars!(tmps, vss, r, w)
@@ -259,10 +259,10 @@ end
 function _updatesteadystate!(ha, x; updateΛss=true) 
 
     res_value = steady_state_value(ha.vss, x)
-    @assert res_value.converged
+    @assert res_value.converged "Value function did not converge"
 
     res_dist = steady_state_distribution(ha.dss, x, res_value.value)
-    @assert res_dist.converged
+    @assert res_dist.converged "Invariant distribution did not converge"
 
     tmps = makecache(Float64)
     updateEGMvars!(tmps, res_value.value, x[1], x[2])
