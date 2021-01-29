@@ -112,19 +112,24 @@ function fixconstrained!(v, outcomes, a₋, r, w, transfers)
                 nguess, n, c = solvelogconstrained(lw, Y, nguess, 1e-11)
                 outcomes[ai+(ei-1)*length(agrid), 1] = agrid[1] # asset policy
                 outcomes[ai+(ei-1)*length(agrid), 2] = n # labour policy
+                outcomes[ai+(ei-1)*length(agrid), 3] = n * egrid[ei] # effective labour policy
+                outcomes[ai+(ei-1)*length(agrid), 4] = c # consumption
                 v[ai, ei] = getdv(c, n, r, w * egrid[ei]) # value function derivative
             end
         end
     end
 end
 
-function inner_update_outcomes!(Y, a₋, n) 
+function inner_update_outcomes!(Y, a₋, n, c) 
     na = size(agrid, 1)
-    # fill first column with a, second with n
+    # fill first column with a, second with raw n
+    # third with effective n, fourth with consumption
     loc = 1
     for ei in axes(n, 2)
         @views fastinterp!(Y[loc:loc+na-1, 1], agrid, a₋[:, ei], agrid)
         @views fastinterp!(Y[loc:loc+na-1, 2], agrid, a₋[:, ei], n[:, ei])
+        @views fastinterp!(Y[loc:loc+na-1, 3], agrid, a₋[:, ei], egrid[ei] .* n[:, ei])
+        @views fastinterp!(Y[loc:loc+na-1, 4], agrid, a₋[:, ei], c[:, ei])
         loc += na
     end
 end
@@ -227,7 +232,7 @@ function combined_evaluation!(vf, Y, dist, dist0, xt, tmps)
     updateEGMvars!(tmps, vf, r, w, transfers)
     W, c, n, a₋ = tmps
 
-    inner_update_outcomes!(Y, a₋, n)
+    inner_update_outcomes!(Y, a₋, n, c)
     inner_iterate_distribution!(dist, dist0, a₋, c, n)
     inner_backwards_iterate!(vf, a₋, W, r)
     fixconstrained!(vf, Y, a₋, r, w, transfers)
@@ -251,7 +256,7 @@ function steady_state_value(initv, xss; maxiter=1000, tol=1e-10)
     # Y does not matter but it saves having to write a 
     # specialized fixconstrained function which does not
     # update Y
-    Y = zeros(eltype(xss), size(v, 1) * size(v, 2), 2)
+    Y = zeros(eltype(xss), size(v, 1) * size(v, 2), 4)
 
     for iter in 1:maxiter
         updateEGMvars!(tmps, v, r, w, transfers)
@@ -308,7 +313,7 @@ function _updatesteadystate!(ha, x)
     ha.xss .= x
     ha.vss .= res_value.value
     ha.dss .= res_dist.value
-    inner_update_outcomes!(ha.yss, a₋, n)
+    inner_update_outcomes!(ha.yss, a₋, n, c)
     fixconstrained!(W, ha.yss, a₋, x[1], x[2], transfers)
     ha.Λss .= Λss
 
@@ -317,7 +322,7 @@ function _updatesteadystate!(ha, x)
 end
 
 ha_block = HetBlock(
-    [:r, :w, :d, :τ], [:𝒩, :𝒜], 300,
+    [:r, :w, :d, :τ], [:𝒜, :rawN, :𝒩, :𝒞], 300,
     combined_evaluation!,
     makecache,
     xss,
@@ -326,7 +331,7 @@ ha_block = HetBlock(
     ],
     ones(length(agrid) * length(egrid)) / (length(agrid) * length(egrid)),
     spzeros(length(agrid) * length(egrid), length(agrid) * length(egrid)),
-    zeros(length(agrid) * length(egrid), 2), # 2 for two outputs,
+    zeros(length(agrid) * length(egrid), 4), # 4 for four outputs,
     _updatesteadystate!
 )
 

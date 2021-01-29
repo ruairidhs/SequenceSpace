@@ -97,7 +97,7 @@ end
 function get_derivs(xss, vss, dss, ha)
 
     diffs = zeros(size(vss, 1) * size(vss, 2) + length(ha.outputs), ha.T)
-    res   = zeros((size(vss, 1) * size(vss, 2) + 2) * ha.T, length(xss))
+    res   = zeros((size(vss, 1) * size(vss, 2) + length(ha.outputs)) * ha.T, length(xss))
     Threads.@threads for inputindex in axes(xss, 1)
         ForwardDiff.derivative!(
             view(res, :, inputindex),
