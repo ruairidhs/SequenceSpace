@@ -57,38 +57,40 @@ function getcorrelations(var1, vars, shockcoefs, Gs)
     T = size(shockcoefs, 1)
     vs = pushfirst!(copy(vars), var1)
     input = makeinput(length(vs), size(shockcoefs, 2), T)
-    updateMAcoefficients!(input, vs, shockcoefs, Gs)
+    padded_input = cat(input, zeros(axes(input)), dims=3)
+    updateMAcoefficients!(padded_input, vs, shockcoefs, Gs)
     fft_cache = makefftcache(input)
 
-    autocovs = fastcov(input, fft_cache, T)
+    autocovs = fastcov(padded_input, fft_cache, T)
+
+    sds = sqrt.(diag(autocovs[:, :, 1]))
+
     forward_corrs  = [autocovs[1, :, t] ./ (sds * sds[1]) for t in 1:T]
     backward_corrs = [autocovs[:, 1, t] ./ (sds * sds[1]) for t in T:-1:2]
     ordered_corrs  = vcat(permutedims.(vcat(backward_corrs, forward_corrs))...)
     return ordered_corrs
 end
 
-function makeV(autocovs, Tobs)
+function updateV!(V, autocovs, Tobs)
 
     # returns cholesky decomposition of V (p. 34). autocovs is output of fastcov
 
-    no = size(autocovs, 1)
-    V = zeros(no * Tobs, no * Tobs)
+    no, T2 = size(autocovs, 1), size(autocovs, 3)
+    # V = zeros(no * Tobs, no * Tobs)
 
     # Fill in V using each panel of autocovs
     # Only need to fill half of the matrix as it is symmetric
     # WARNING! currently only works for Tobs < T, need to add zeros to generalize
-    rloc = 1
-    for t1 in 1:Tobs
-        cloc = rloc # start on the diagonal
-        for t2 in 1:Tobs-t1+1 # don't need to go through all Tobs on later rows
-            view(V, rloc:rloc+no-1, cloc:cloc+no-1) .= autocovs[:, :, t2] # swap tp here
-            cloc += no
+    
+    for tcol in 1:Tobs
+        c = no*tcol
+        for trow in 1:tcol
+            r = no*trow
+            @views V[r-no+1:r, c-no+1:c] .= autocovs[:, :, tcol-trow+1]
         end
-        rloc += no
     end
 
     return cholesky!(Symmetric(V))
-    #return Symmetric(V)
 end
 
 function _likelihood(V, obsdata)
@@ -111,15 +113,14 @@ function make_likelihood(shockfunc, nz, obsdata, obsvars, Gs)
     fft_cache = makefftcache(input_array)
     P    = plan_rfft(padded_input, 3) # 3 means perform the FFT along 3rd dim, i.e. T
     Pinv = plan_irfft(fft_cache, size(padded_input, 3), 3)
-    # autocovs = zeros(no, no, 2T)
-
+    V = zeros(no * Tobs, no * Tobs)
     shockmat = ones(T, nz)
 
     function l(Ω)
         shockfunc(shockmat, Ω)
         updateMAcoefficients!(padded_input, obsvars, shockmat, Gs)
         return _likelihood(
-            makeV(fastcov(padded_input, fft_cache, P, Pinv, T), Tobs), datavector
+            updateV!(V, fastcov(padded_input, fft_cache, P, Pinv, T), Tobs), datavector
         )
         #return _likelihood(makeV(fastcov(padded_input, fft_cache, P, Pinv, T), Tobs), datavector)
     end

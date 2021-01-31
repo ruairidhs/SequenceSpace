@@ -29,6 +29,8 @@ function fi2(x, start, nodes, vals)
 end
 
 function fastinterp!(res, xs, nodes, vals)
+    # @assert issorted(xs) "fastinterp! xs not sorted"
+    # @assert issorted(nodes) "fastinterp! nodes not sorted"
     start = 1
     @inbounds for i in eachindex(res)
         res[i], start = fi2(xs[i], start, nodes, vals)

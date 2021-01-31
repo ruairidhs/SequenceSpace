@@ -1,40 +1,21 @@
 using SequenceSpace
 
-using DelimitedFiles
-using StaticArrays
-using LinearAlgebra
 using SparseArrays
 
-#region Household block =====
+# Functions for the household block for the Krusell-Smith block
+# Required constant parameters:
+#   - agrid (asset grid), vector
+#   - egrid (exogenous state grid), vector
+#   - Qt (transpose of exogenous transition matrix), matrix
+#   - β (household discount rate), scalar
+#   - φ
+#   - σ
+#   - ν
+#   - drule
+#   - trule
 
-# ===== Set up parameters =====
+#region Iteration functions =====
 
-const β = 0.982
-const φ = 0.786
-const σ = 2.0
-const ν = 2.0
-
-const agrid = readdlm("tempdata/paper_hank/hank_a_grid.csv", ',', Float64)[:, 1] # as vector
-egrid_raw = readdlm("tempdata/paper_hank/hank_e_grid.csv", ',', Float64)[:, 1] # as vector
-const egrid = SVector{length(egrid_raw)}(egrid_raw)
-Qt_raw   = readdlm("tempdata/paper_hank/hank_Pi.csv", ',', Float64) |> permutedims
-const Qt = SMatrix{size(Qt_raw, 1), size(Qt_raw, 2)}(Qt_raw)
-
-vss_python  = readdlm("tempdata/paper_hank/hank_Va.csv", ',', Float64) |> permutedims
-
-# Steady state values
-exog_invariant = Qt^1000 * (ones(axes(Qt, 1)) / size(Qt, 1))
-drule_raw = egrid ./ dot(egrid, exog_invariant)
-trule_raw = egrid ./ dot(egrid, exog_invariant)
-const drule = SVector{length(egrid)}(drule_raw)
-const trule = SVector{length(egrid)}(trule_raw)
-
-# r = 0.005, w = 0.833, d = 0.166, t = 0.028
-xss = [0.005, 0.833, 0.166, 0.028]
-
-# ===== Household block =====
-
-# v axes: (axes(agrid, 1), axes(egrid, 1))
 function makecache(S)
     (   zeros(S, (axes(agrid, 1), axes(egrid, 1))),
         zeros(S, (axes(agrid, 1), axes(egrid, 1))),
@@ -221,7 +202,7 @@ function inner_backwards_iterate!(v, a₋, W, r)
     return v
 end
 
-function combined_evaluation!(vf, Y, dist, dist0, xt, tmps)
+function backwards_iterate!(vf, Y, dist, dist0, xt, tmps)
 
     # given x_t and v_(t+1), calculates outcomes (a & c), forward
     # iterates the distribution and backwards iterates v without 
@@ -239,7 +220,10 @@ function combined_evaluation!(vf, Y, dist, dist0, xt, tmps)
 
 end
 
-# ===== Steady state finders =====
+#endregion
+
+#region ===== Steady state functions =====
+
 function supnorm(x, y)
     maximum(abs.(x .- y))
 end
@@ -297,12 +281,12 @@ function steady_state_distribution(initd, xss, vss; maxiter=5000, tol=1e-8)
     return (value=dist, converged=false, iter=maxiter, err=err), Λss
 end
 
-function _updatesteadystate!(ha, x)
+function hanksteadystate!(ha, x; updateΛss=true, tol=1e-8, maxiter = 2000)
 
-    res_value = steady_state_value(ha.vss, x)
+    res_value = steady_state_value(ha.vss, x, maxiter=maxiter, tol=tol)
     @assert res_value.converged "Value function did not converge"
 
-    res_dist, Λss = steady_state_distribution(ha.dss, x, res_value.value)
+    res_dist, Λss = steady_state_distribution(ha.dss, x, res_value.value, maxiter=maxiter, tol=tol)
     @assert res_dist.converged "Invariant distribution did not converge"
 
     tmps = makecache(Float64)
@@ -317,24 +301,8 @@ function _updatesteadystate!(ha, x)
     fixconstrained!(W, ha.yss, a₋, x[1], x[2], transfers)
     ha.Λss .= Λss
 
-    return ha_block
+    return ha
 
 end
-
-ha_block = HetBlock(
-    [:r, :w, :d, :τ], [:𝒜, :rawN, :𝒩, :𝒞], 300,
-    combined_evaluation!,
-    makecache,
-    xss,
-    [   (1+xss[1]) * (0.1 * ((1 + xss[1]) * agrid[ai] + 0.1))^(-1/σ)
-        for ai in eachindex(agrid), ei in eachindex(egrid)
-    ],
-    ones(length(agrid) * length(egrid)) / (length(agrid) * length(egrid)),
-    spzeros(length(agrid) * length(egrid), length(agrid) * length(egrid)),
-    zeros(length(agrid) * length(egrid), 4), # 4 for four outputs,
-    _updatesteadystate!
-)
-
-updatesteadystate!(ha_block, xss)
 
 #endregion

@@ -1,31 +1,16 @@
-using SequenceSpace
+using SequenceSpace 
 
-using DelimitedFiles
-using LinearAlgebra
 using SparseArrays
-using StaticArrays
 
-# absolute file path in case this file is evaluated from multiple locations
-fp = "/Users/ruairidh/.julia/dev/SequenceSpace/"
+# Functions for the household block for the Krusell-Smith block
+# Required constant parameters:
+#   - agrid (asset grid), vector
+#   - egrid (exogenous state grid), vector
+#   - Qt (transpose of exogenous transition matrix), matrix
+#   - β (household discount rate), scalar
 
-const T = 300
+#region Iteration functions =====
 
-#region Household block =====
-
-# ===== Set up parameters =====
-
-const agrid = readdlm(fp * "tempdata/paper_ks/a_grid.csv", ',', Float64)[:, 1]
-egrid_raw   = readdlm(fp * "tempdata/paper_ks/e_grid.csv", ',', Float64)[:, 1]
-const egrid = SVector{length(egrid_raw)}(egrid_raw)
-
-Qt_raw = readdlm(fp * "tempdata/paper_ks/Pi.csv", ',', Float64) |> permutedims
-const Qt = SMatrix{size(Qt_raw, 1), size(Qt_raw, 2)}(Qt_raw)
-
-rwb = readdlm(fp * "tempdata/paper_ks/rwb.csv", ',', Float64)
-const β = rwb[3]
-rss, wss = rwb[1], rwb[2]
-
-# ===== Iteration functions =====
 function updateEGMvars!(vars, vf, r, wage)
 
     W, c, a₋, = vars # doesn't affect tmp1
@@ -159,7 +144,7 @@ function constrained_value(r, w, z, k, kmin)
     )
 end
 
-function inner_backwards_iterate!(v, a₋, W, r, w)
+function inner_value_iterate!(v, a₋, W, r, w)
 
     # directly overwrites v with the new value function
     for ei in axes(v, 2)
@@ -179,7 +164,7 @@ function inner_backwards_iterate!(v, a₋, W, r, w)
 
 end
 
-function combined_evaluation!(vf, Y, d, d0, xt, tmps)
+function backwards_iterate!(vf, Y, d, d0, xt, tmps)
     # given x_t and v_(t+1), calculates outcomes (a & c), forward
     # iterates the distribution and backwards iterates v without 
     # redundant computation
@@ -190,7 +175,7 @@ function combined_evaluation!(vf, Y, d, d0, xt, tmps)
 
     inner_update_outcomes!(Y, a₋, c, r, w)
     inner_iterate_distribution!(d, d0, a₋, c, tmp1)
-    inner_backwards_iterate!(vf, a₋, W, r, w)
+    inner_value_iterate!(vf, a₋, W, r, w)
 
 end
 
@@ -202,7 +187,9 @@ function makecache(S)
     )
 end
 
-# ===== Steady state finders =====
+#endregion =====
+
+#region Steady-state functions =====
 
 function supnorm(x, y)
     maximum(abs.(x .- y))
@@ -210,7 +197,6 @@ end
 
 function steady_state_value(initv, xss; maxiter=1000, tol=1e-8)
 
-    #v = [1 / (a+0.001) for a in agrid, e in egrid]
     v = initv
     holder = copy(v)
     err = 0
@@ -221,7 +207,7 @@ function steady_state_value(initv, xss; maxiter=1000, tol=1e-8)
 
     for iter in 1:maxiter
       updateEGMvars!(tmps, v, r, w)
-      inner_backwards_iterate!(v, tmps[3], tmps[1], r, w)
+      inner_value_iterate!(v, tmps[3], tmps[1], r, w)
       err = supnorm(v, holder)
       if err < tol
         return (value=v, converged=true, iter=iter, err=err)
@@ -234,7 +220,6 @@ end
 
 function steady_state_distribution(initd, xss, vss; maxiter=2000, tol=1e-8)
 
-    # d = ones(length(agrid) * length(egrid)) / (length(agrid) * length(egrid))
     d = initd
     holder = copy(d)
 
@@ -256,12 +241,13 @@ function steady_state_distribution(initd, xss, vss; maxiter=2000, tol=1e-8)
     return (value=d, converged=false, iter=maxiter, err=err)
 end
 
-function _updatesteadystate!(ha, x; updateΛss=true) 
-
-    res_value = steady_state_value(ha.vss, x)
+function kssteadystate!(ha, x;
+    updateΛss=true, tol=1e-8, maxiter=2000
+) 
+    res_value = steady_state_value(ha.vss, x, maxiter = maxiter, tol = tol)
     @assert res_value.converged "Value function did not converge"
 
-    res_dist = steady_state_distribution(ha.dss, x, res_value.value)
+    res_dist = steady_state_distribution(ha.dss, x, res_value.value, maxiter = maxiter, tol = tol)
     @assert res_dist.converged "Invariant distribution did not converge"
 
     tmps = makecache(Float64)
@@ -279,79 +265,4 @@ function _updatesteadystate!(ha, x; updateΛss=true)
 
 end
 
-ha_block = HetBlock(
-    [:r, :w], [:𝓀, :c], T,
-    combined_evaluation!,
-    makecache,
-    [rss, wss],
-    [1 / (a+0.001) for a in agrid, e in egrid],
-    ones(length(agrid) * length(egrid)) / (length(agrid) * length(egrid)),
-    spzeros(length(agrid) * length(egrid), length(agrid) * length(egrid)),
-    zeros(length(agrid) * length(egrid), 2), # 2 for two outputs,
-    _updatesteadystate!
-)
-
-updatesteadystate!(ha_block, [rss, wss])
-
-#endregion
-
-#region Simple blocks =====
-
-const δ = 0.025
-const α = 0.11
-
-kss, zss = 3.142857142865353, 0.8816460975214567
-
-firms_block = @simpleblock [:k, :z] [:r, :w, :y] [kss, zss] (k, z) -> begin
-  r = α * z[0] * k[-1]^(α-1) - δ
-  w = (1-α) * z[0] * k[-1]^α
-  y = z[0] * k[-1]^α
-  return [r, w, y]
-end
-
-eq_block = @simpleblock [:𝓀, :k] [:h] [0.0, 0.0] (𝓀, k) -> [𝓀[0] - k[0]]
-
-#endregion
-
-#region make Model graph =====
-
-blocks = [ha_block, firms_block, eq_block]
-mg = ModelGraph(blocks, [:k], [:z], [:h], [:k, :z, :y, :r, :w])
-updatepartialJacobians!(mg)
-Gs = geneqjacobians(mg, Val(:forward))
-
-# Gs = generaleqJacobians(makeG(mg), mg)
-
-#=
-g_forward = makeG(mg)
-g_backward = SequenceSpace.makeG_backwards(mg)
-Gsback = generaleqJacobians(SequenceSpace.makeG_backwards(mg), mg)
-
-@benchmark generaleqJacobians(makeG($mg), $mg)
-@benchmark generaleqJacobians(SequenceSpace.makeG_backwards($mg), $mg)
-
-T = mg.T
-nt, nu, nx = length(mg.eqvars), length(mg.unknowns), length(mg.exog)
-bigG = zeros(T * nu, T * nx)
-Hu = zeros(T * nu, T * nu)
-Hx = zeros(T * nu, T * nx)
-Gs = Dict( # initialize
-  var => zeros(T, T * length(mg.exog)) for var in mg.vars
-)
-
-@benchmark SequenceSpace.updatinggeq_backward!($Gs, $bigG, $Hu, $Hx, $mg)
-@benchmark SequenceSpace.updatinggeq_forward!($Gs, $bigG, $Hu, $Hx, $mg)
-
-function profileJacob(n, mg)
-  for i in 1:n
-    SequenceSpace.updatinggeq_forward!(Gs, bigG, Hu, Hx, mg)
-  end
-end
-=#
-#=
-Gkzpaper = readdlm("tempdata/ks_regression/Gkz.csv", ',', Float64)
-Grzpaper = readdlm("tempdata/ks_regression/Grz.csv", ',', Float64)
-Jhakr    = readdlm("tempdata/ks_regression/Jhakr.csv", ',', Float64)
-Jhakw    = readdlm("tempdata/ks_regression/Jhakw.csv", ',', Float64)
-=#
 #endregion

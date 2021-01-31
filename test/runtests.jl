@@ -25,35 +25,41 @@ using Interpolations # for fastinterp
 
     @testset "Krusell & Smith" begin
 
-        include("../src/krusell-smith.jl") # includes required packages
+        # include("../src/krusell-smith.jl") # includes required packages
+        include("krusell_smith_test.jl")
 
         @testset "Simple Block" begin
-            j = jacobian(firms_block)
             # Compare to analytic result 
-            @test Matrix(SequenceSpace.sparse(j[(:z, :r)], T)) ≈ diagm(repeat([α * kss^(α-1)], T))
-            @test Matrix(SequenceSpace.sparse(j[(:z, :w)], T)) ≈ diagm(repeat([(1-α)*kss^α], T))
-            @test Matrix(SequenceSpace.sparse(j[(:k, :r)], T)) ≈ diagm(-1 => repeat([α*(α-1)*zss*kss^(α-2)], T-1))
-            @test Matrix(SequenceSpace.sparse(j[(:k, :w)], T)) ≈ diagm(-1 => repeat([α*(1-α)*zss*kss^(α-1)], T-1))
+            @test Matrix(SequenceSpace.sparse(Jfirms[(:z, :r)], T)) ≈ diagm(repeat([α * kss^(α-1)], T))
+            @test Matrix(SequenceSpace.sparse(Jfirms[(:z, :w)], T)) ≈ diagm(repeat([(1-α)*kss^α], T))
+            @test Matrix(SequenceSpace.sparse(Jfirms[(:k, :r)], T)) ≈ diagm(-1 => repeat([α*(α-1)*zss*kss^(α-2)], T-1))
+            @test Matrix(SequenceSpace.sparse(Jfirms[(:k, :w)], T)) ≈ diagm(-1 => repeat([α*(1-α)*zss*kss^(α-1)], T-1))
         end
 
         @testset "Het Agents Block" begin
-            j = jacobian(ha_block)
             # Regression test against previous result (which is same as paper)
-            @test j[(:r, :𝓀)] ≈ readdlm("../tempdata/ks_regression/jrk.csv", ',', Float64)
+            @test Jhh[(:r, :𝓀)] ≈ readdlm("../tempdata/ks_regression/jrk.csv", ',', Float64)
         end
         
         @testset "Graphs" begin
             # Regression test
-            nt, nu, nx = length(mg.eqvars), length(mg.unknowns), length(mg.exog)
-            Hu, Hx, G = zeros(mg.T * nt, mg.T * nu), zeros(mg.T * nt, mg.T * nx), zeros(mg.T * nu, mg.T * nx)
-            SequenceSpace.fillG!(G, Hu, Hx, mg, Val(:forward))
+            nt, nu, nx = length(model.eqvars), length(model.unknowns), length(model.exog)
+            Hu, Hx, G = zeros(model.T * nt, model.T * nu), zeros(model.T * nt, model.T * nx), zeros(model.T * nu, model.T * nx)
+            # forward diff test
+            SequenceSpace.fillG!(G, Hu, Hx, model, Val(:forward))
             oldG = readdlm("../tempdata/ks_regression/ksG.csv", ',', Float64)
             @test G ≈ oldG
-            # check that backwards mode gives same result
-            SequenceSpace.resetnodematrices!(mg, [:h])
+            # backward diff test
+            SequenceSpace.resetnodematrices!(model, [:h])
             fill!(G, 0)
-            SequenceSpace.fillG!(G, Hu, Hx, mg, Val(:backward))
+            SequenceSpace.fillG!(G, Hu, Hx, model, Val(:backward))
             @test G ≈ oldG
+        end
+
+        @testset "Likelihood" begin
+            # check that the likelihood works
+            @test arma_likelihood([0.9, 0.1, 0.5]) ≈ 70.13047528997609
+            @test arma_likelihood([0.5, 0.5, 2.0]) ≈ -139.20913155989157
         end
         
     end

@@ -4,17 +4,10 @@ using ForwardDiff
 using FFTW
 using LinearAlgebra
 using LoopVectorization
-
-# using OffsetArrays
-
-# Used in sparseblocks.jl
 using SparseArrays
-using StaticArrays
-# using SparseDiffTools
-# using SparsityDetection
-
 using LightGraphs
 using GraphPlot
+using Colors
 
 export Block,
        inputs,
@@ -30,26 +23,20 @@ export Block,
        geneqjacobians,
        geneqjacobians!,
        fastinterp!,
-       fastcov,
-       makefftcache,
-       makeinput,
-       updateMAcoefficients!,
-       makeV,
-       _likelihood
-       
-include("fastinterp.jl")
+       make_likelihood,
+       getcorrelations
 
 # Each subtype must implement the following methods:
 #   - inputs
 #   - outputs
 #   - jacobian
-#   - getT
 abstract type Block end
 
-include("shiftblocks.jl")
+include("fastinterp.jl")
 include("hetblocks.jl")
+include("shiftmatrices.jl")
+include("simpleblocks.jl")
 include("graphs.jl")
-
 include("likelihood.jl")
 
 end # module

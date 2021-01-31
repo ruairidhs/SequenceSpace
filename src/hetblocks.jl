@@ -12,6 +12,9 @@ struct HetBlock <: Block
     #   - Fills y with y(v_(t+1), xₜ) (as in eq 12)
     #   - Finally iterates v=v(v_(t+1), xₜ) (eq 10)
     iterate_block!::Function
+    # A function which can be used to update steady-state values
+    # takes two arguments, the block itself (for vss, dss, Λss, yss), and a new input vector xss
+    updatesteadystate!::Function
     # Preallocate temporary cache used by iterate_block!
     makecache::Function
 
@@ -21,16 +24,30 @@ struct HetBlock <: Block
     Λss::SparseMatrixCSC{Float64, Int} # Transition matrix (used only to make curlyEs)
     yss::Array{Float64, 2} # y from eq12, each column is a different output=>size(2) = length(outputs)
 
-    # A function which can be used to update steady-state values
-    # takes two arguments, the block itself (for vss, dss, Λss, yss), and a new input vector xss
-    updatesteadystate!::Function
+end
 
+function HetBlock(
+    inputs, outputs, T,
+    iterate_block!, updatesteadystate!, makecache,
+    xss, vss, dss
+)
+    @assert length(inputs) == length(xss)
+    na, ne = size(vss)
+    HetBlock(
+        inputs, outputs, T,
+        iterate_block!, updatesteadystate!, makecache,
+        xss, vss, dss,
+        spzeros(na * ne, na * ne),
+        zeros(na * ne, length(outputs))
+    )
 end
 
 inputs(ha::HetBlock) = ha.inputs
 outputs(ha::HetBlock) = ha.outputs
 getT(ha::HetBlock) = ha.T
-updatesteadystate!(ha::HetBlock, new_xss) = ha.updatesteadystate!(ha, new_xss)
+updatesteadystate!(ha::HetBlock, new_xss; updateΛss=true, maxiter=2000, tol=1e-8) = ha.updatesteadystate!(
+    ha, new_xss; updateΛss=updateΛss, maxiter=maxiter, tol=tol
+)
 
 # ===== Uses the fake news algorithm to compute the Jacobian =====
 

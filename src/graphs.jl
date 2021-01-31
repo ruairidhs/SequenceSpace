@@ -47,7 +47,8 @@ function ModelGraph(blocks, unknowns, exog, eqvars, simplenodes)
     vars = union([vcat(inputs(block), outputs(block)) for block in blocks]...)
     g = makegraph(vars, blocks)
 
-    @assert length(unknowns) == length(eqvars) # needed for invertibility
+    @assert !is_cyclic(g) "Graph is cyclic"
+    @assert length(unknowns) == length(eqvars) "Number of unknowns does not equal number of targets"
 
     eJ = Dict{Tuple{Symbol, Symbol}, Union{Matrix{Float64}, ShiftMatrix}}()
     for block in blocks
@@ -77,7 +78,22 @@ function ModelGraph(blocks, unknowns, exog, eqvars, simplenodes)
 end
 
 # ===== Methods for ModelGraphs =====
-plotgraph(mg::ModelGraph) = gplot(mg.graph, nodelabel = mg.vars)
+function plotgraph(mg::ModelGraph)
+    nodecolours = [
+        colorant"SeaGreen", # unknowns
+        colorant"Salmon",   # exogenous
+        colorant"Thistle",     # targets
+        colorant"SkyBlue",  # base
+    ]
+    membership = [
+        v ∈ mg.unknowns ? 1 :
+        v ∈ mg.exog     ? 2 :
+        v ∈ mg.eqvars   ? 3 : 4
+        for v in mg.vars
+    ]
+    sorted_graph = 
+    gplot(mg.graph, nodelabel = mg.vars, nodefillc=nodecolours[membership], layout=circular_layout)
+end
 
 function updatesteadystate!(mg::ModelGraph, new_steadystate)
     # new_steadystate is a vector containing new steady state values
@@ -181,7 +197,7 @@ function forwardgetJ!(Hu, start, targets, mg)
 
     loc = 1
     for ti in eachindex(targets)
-        view(Hu, loc:loc+mg.T-1, :) .= mg.vJ[targets[ti]]
+        Hu[loc:loc+mg.T-1, :] .= mg.vJ[targets[ti]]
         loc += mg.T
     end
 
@@ -192,6 +208,7 @@ function forwardfillH!(H, starts, targets, mg)
     loc = 1
     for si in eachindex(starts)
         forwardgetJ!(view(H, :, loc:loc+T-1), starts[si], targets, mg)
+        loc += T
     end
     return H
 end
