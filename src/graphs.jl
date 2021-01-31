@@ -82,7 +82,7 @@ function plotgraph(mg::ModelGraph)
     nodecolours = [
         colorant"SeaGreen", # unknowns
         colorant"Salmon",   # exogenous
-        colorant"Thistle",     # targets
+        colorant"Thistle",  # targets
         colorant"SkyBlue",  # base
     ]
     membership = [
@@ -253,6 +253,11 @@ end
 function geneqjacobians!(Gs, G, Hu, Hx, mg, direction)
     # version with preallocated arrays for performance
     T = mg.T
+
+    # reset Gs to zero
+    for (k, mat) in pairs(Gs)
+        fill!(mat, 0.0)
+    end
 
     fillG!(G, Hu, Hx, mg, direction)
 

@@ -91,8 +91,8 @@ function _jacobian(sb::SimpleBlock, input_index)
 end
 
 function toshiftmat(v, min_index)
-    #return deletezeros!(ShiftMatrix(Dict(
-    #    z[1] => z[2] for z in zip(Iterators.countfrom(min_index), v)
+    # return deletezeros!(ShiftMatrix(Dict(
+    #     z[1] => z[2] for z in zip(Iterators.countfrom(min_index), v)
     #)))
     return ShiftMatrix(Dict(
         z[1] => z[2] for z in zip(Iterators.countfrom(min_index), v)

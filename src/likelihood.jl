@@ -82,7 +82,7 @@ function updateV!(V, autocovs, Tobs)
     # Only need to fill half of the matrix as it is symmetric
     # WARNING! currently only works for Tobs < T, need to add zeros to generalize
     
-    for tcol in 1:Tobs
+    @inbounds for tcol in 1:Tobs
         c = no*tcol
         for trow in 1:tcol
             r = no*trow

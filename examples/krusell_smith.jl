@@ -161,7 +161,7 @@ plot(
     layout = (1, 2), size=(1200,400),
     bottom_margin=4mm
 )
-savefig("./jhh.pdf")
+savefig("./examples/jhh.pdf")
 
 #endregion
 
@@ -183,7 +183,7 @@ plot(
     layout = (1, 2), size=(1200,400),
     bottom_margin = 4mm
 )
-savefig("./geky.pdf")
+savefig("./examples/geky.pdf")
 
 #endregion 
 
@@ -245,7 +245,7 @@ function get_posterior_mode(posterior, initial_guess)
     optimize(Ω -> -posterior(Ω), initial_guess, LBFGS()) 
 end
 res = get_posterior_mode(posteriordensity, mode.(priors))
-@asset Optim.converged(res)
+@assert Optim.converged(res) "Posterior mode did not converge"
 
 # monte-carlo markov chain
 function mcmc(posterior, draws, posteriormode, scaling_factor)
@@ -285,7 +285,7 @@ display(chain)
 prinln("Benchmarking...")
 
 # Fake news
-fakenews = @benchmark $jacobian(hh_block)
+fakenews = @benchmark jacobian($hh_block)
 
 # General equilibrium jacobians
 nt, nu, nx = length(model.eqvars), length(model.unknowns), length(model.exog)

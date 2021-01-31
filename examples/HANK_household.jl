@@ -7,11 +7,11 @@ using SparseArrays
 #   - agrid (asset grid), vector
 #   - egrid (exogenous state grid), vector
 #   - Qt (transpose of exogenous transition matrix), matrix
-#   - β (household discount rate), scalar
-#   - φ
+#   - β (household discount rate), scalar -> used for calibration
+#   - φ (disutility of labour), scalar -> used for calibration
 #   - σ
 #   - ν
-#   - drule
+#   - drule -> dividend and tax transfer rules
 #   - trule
 
 #region Iteration functions =====
@@ -24,7 +24,7 @@ function makecache(S)
     )
 end
 
-function updateEGMvars!(vars, vf, r, wage, transfers)
+function updateEGMvars!(vars, vf, r, wage, transfers, ps)
 
     # Given inputs xt and future values vf, fill vars matrices with
     # values needed for EGM. Each matrix has dims (a′, e)
@@ -32,7 +32,9 @@ function updateEGMvars!(vars, vf, r, wage, transfers)
     #  c  - current consumption from FOC
     #  n  - current labour from FOC
     #  a₋ - initial assets consistent with optimal choice a
-    # ps wage instead of w to make it clear which is W and which is wage
+    # wage instead of w to make it clear which is W and which is wage
+
+    β, φ = ps
 
     W, c, n, a₋ = vars
 
@@ -55,14 +57,14 @@ end
 
 # Functions for evaluating the policy function and 
 # value function derivative for constrained households
-function solvelogconstrained(lw, Y, nguess, tol)
+function solvelogconstrained(lw, Y, nguess, tol, φ)
     # maximises u(c, n) s.t c = exp(lw + ln) + Y
     # uses Newton's method to solve FOC
     ln = nguess
     f = tol + 1.0
     while abs(f) > tol
-        ewn = exp(lw + ln)
-        f   = -σ * log(ewn + Y) +lw - log(φ) - ν * ln
+        ewn = exp(lw + ln) # ewn + Y = c
+        f   = -σ * log(ewn + Y) + lw - log(φ) - ν * ln
         f′  = -σ * ewn / (ewn + Y) - ν
         ln -= f / f′
     end
@@ -70,7 +72,7 @@ function solvelogconstrained(lw, Y, nguess, tol)
     return ln, exp(ln), exp(lw + ln) + Y
 end
 
-function getdv(c, n, r, w)
+function getdv(c, n, r, w, φ)
     # returns derivative of constrained value function wrt a₋ 
     # at c*=c and n*=n
     dn = (-σ * (1.0 + r) / c) / (ν / n + σ * w / c)
@@ -78,10 +80,10 @@ function getdv(c, n, r, w)
     return dc * c^(-σ) - φ * dn * n^ν
 end
 
-function fixconstrained!(v, outcomes, a₋, r, w, transfers)
+function fixconstrained!(v, outcomes, a₋, r, w, transfers, φ)
     # need to fix outcomes: [a, n]; values: v
     for ei in axes(a₋, 2)
-        # amin is the value of a₋ which you choose to a′=lower_bound
+        # amin is the value of a₋ which you choose a′=lower_bound
         # any lower a is constrained
         amin = a₋[1, ei] 
         nguess, lw = 0.0, log(w * egrid[ei])
@@ -90,12 +92,12 @@ function fixconstrained!(v, outcomes, a₋, r, w, transfers)
                 break # monotonicity => can stop checking
             else # they are constrained
                 Y = (1.0 + r) * agrid[ai] + transfers[ei]
-                nguess, n, c = solvelogconstrained(lw, Y, nguess, 1e-11)
+                nguess, n, c = solvelogconstrained(lw, Y, nguess, 1e-12, φ)
                 outcomes[ai+(ei-1)*length(agrid), 1] = agrid[1] # asset policy
                 outcomes[ai+(ei-1)*length(agrid), 2] = n # labour policy
                 outcomes[ai+(ei-1)*length(agrid), 3] = n * egrid[ei] # effective labour policy
                 outcomes[ai+(ei-1)*length(agrid), 4] = c # consumption
-                v[ai, ei] = getdv(c, n, r, w * egrid[ei]) # value function derivative
+                v[ai, ei] = getdv(c, n, r, w * egrid[ei], φ) # value function derivative
             end
         end
     end
@@ -202,7 +204,7 @@ function inner_backwards_iterate!(v, a₋, W, r)
     return v
 end
 
-function backwards_iterate!(vf, Y, dist, dist0, xt, tmps)
+function backwards_iterate!(vf, Y, dist, dist0, xt, tmps, ps)
 
     # given x_t and v_(t+1), calculates outcomes (a & c), forward
     # iterates the distribution and backwards iterates v without 
@@ -210,13 +212,13 @@ function backwards_iterate!(vf, Y, dist, dist0, xt, tmps)
 
     r, w, d, t = xt[1], xt[2], xt[3], xt[4]
     transfers  = d * drule - t * trule
-    updateEGMvars!(tmps, vf, r, w, transfers)
+    updateEGMvars!(tmps, vf, r, w, transfers, ps)
     W, c, n, a₋ = tmps
 
     inner_update_outcomes!(Y, a₋, n, c)
     inner_iterate_distribution!(dist, dist0, a₋, c, n)
     inner_backwards_iterate!(vf, a₋, W, r)
-    fixconstrained!(vf, Y, a₋, r, w, transfers)
+    fixconstrained!(vf, Y, a₋, r, w, transfers, ps[2])
 
 end
 
@@ -228,7 +230,7 @@ function supnorm(x, y)
     maximum(abs.(x .- y))
 end
 
-function steady_state_value(initv, xss; maxiter=1000, tol=1e-10)
+function steady_state_value(initv, xss, ps; maxiter=1000, tol=1e-10)
 
     v = initv
     holder = copy(v)
@@ -243,9 +245,9 @@ function steady_state_value(initv, xss; maxiter=1000, tol=1e-10)
     Y = zeros(eltype(xss), size(v, 1) * size(v, 2), 4)
 
     for iter in 1:maxiter
-        updateEGMvars!(tmps, v, r, w, transfers)
+        updateEGMvars!(tmps, v, r, w, transfers, ps)
         inner_backwards_iterate!(v, tmps[4], tmps[1], r)
-        fixconstrained!(v, Y, tmps[4], r, w, transfers)
+        fixconstrained!(v, Y, tmps[4], r, w, transfers, ps[2])
         err = supnorm(v, holder)
         if err < tol
             return (value=v, converged=true, iter=iter, err=err)
@@ -256,7 +258,7 @@ function steady_state_value(initv, xss; maxiter=1000, tol=1e-10)
     return (value=v, converged=false, iter=maxiter, err=err)
 end
 
-function steady_state_distribution(initd, xss, vss; maxiter=5000, tol=1e-8)
+function steady_state_distribution(initd, xss, vss, ps; maxiter=5000, tol=1e-8)
 
     dist = initd
     holder = copy(dist)
@@ -265,7 +267,7 @@ function steady_state_distribution(initd, xss, vss; maxiter=5000, tol=1e-8)
     tmps = makecache(eltype(xss))
     r, w, d, t = xss[1], xss[2], xss[3], xss[4]
     transfers = d * drule - t * trule
-    updateEGMvars!(tmps, vss, r, w, transfers)
+    updateEGMvars!(tmps, vss, r, w, transfers, ps)
 
     Λss = constructΛ(tmps[4], tmps[1])
 
@@ -281,24 +283,24 @@ function steady_state_distribution(initd, xss, vss; maxiter=5000, tol=1e-8)
     return (value=dist, converged=false, iter=maxiter, err=err), Λss
 end
 
-function hanksteadystate!(ha, x; updateΛss=true, tol=1e-8, maxiter = 2000)
+function hanksteadystate!(ha, x, ps; updateΛss=true, tol=1e-8, maxiter = 2000)
 
-    res_value = steady_state_value(ha.vss, x, maxiter=maxiter, tol=tol)
+    res_value = steady_state_value(ha.vss, x, ps, maxiter=maxiter, tol=tol)
     @assert res_value.converged "Value function did not converge"
 
-    res_dist, Λss = steady_state_distribution(ha.dss, x, res_value.value, maxiter=maxiter, tol=tol)
+    res_dist, Λss = steady_state_distribution(ha.dss, x, res_value.value, ps, maxiter=maxiter, tol=tol)
     @assert res_dist.converged "Invariant distribution did not converge"
 
     tmps = makecache(Float64)
     transfers = x[3] * drule - x[4] * trule
-    updateEGMvars!(tmps, res_value.value, x[1], x[2], transfers)
+    updateEGMvars!(tmps, res_value.value, x[1], x[2], transfers, ps)
     W, c, n, a₋ = tmps
 
     ha.xss .= x
     ha.vss .= res_value.value
     ha.dss .= res_dist.value
     inner_update_outcomes!(ha.yss, a₋, n, c)
-    fixconstrained!(W, ha.yss, a₋, x[1], x[2], transfers)
+    fixconstrained!(W, ha.yss, a₋, x[1], x[2], transfers, ps[2])
     ha.Λss .= Λss
 
     return ha
