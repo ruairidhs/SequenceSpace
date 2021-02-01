@@ -4,6 +4,7 @@ This module contains functions to implement the algorithms presented in [Using t
 
 ## Running the code
 The module and all core dependencies can be installed by entering the package manager in the Julia REPL with `]`, then `add <FILEPATH>` where `<FILEPATH>` is where this directory is saved on your computer.
+The code is only tested for Julia 1.5.0.
 
 **Important:**
 This package relies on `ForwardDiff.jl` for derivatives.
@@ -12,6 +13,8 @@ This issue is explained [here](http://www.juliadiff.org/ForwardDiff.jl/stable/us
 
 ## Examples
 The subdirectory `examples` contains well-commented code that replicates the Krusell-Smith and one-asset HANK models from the paper, illustrating how to use the package.
+These files require some additional packages which are not dependencies of the package, e.g. for plotting and Bayesian estimation.
+The required additional packages are listed at the top of each file.
 
 ## src
 The subdirectory `src` defines the functions and types required for computing the jacobians and likelihoods and can be loaded with `using SequenceSpace`.
