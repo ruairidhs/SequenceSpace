@@ -2,8 +2,10 @@
 
 This module contains functions to implement the algorithms presented in [Using the Sequence-Space Jacobian to Solve and Estimate Heterogeneous-Agent Models](http://web.stanford.edu/~aauclert/sequence_space_jacobian.pdf), by Auclert, Bardóczy, Rognlie and Straub (2020).
 
+WORK IN PROGRESS.
+
 ## Running the code
-The module and all core dependencies can be installed by entering the package manager in the Julia REPL with `]`, then `add <FILEPATH>` where `<FILEPATH>` is where this directory is saved on your computer.
+The module and all core dependencies can be installed by entering the package manager in the Julia REPL with `]`, then `add https://github.com/ruairidhs/SequenceSpace`.
 The code is only tested for Julia 1.5.0.
 
 **Important:**
