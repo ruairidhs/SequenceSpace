@@ -1,6 +1,7 @@
 using SequenceSpace
 
 using Test
+using DelimitedFiles
 using Interpolations # for fastinterp
 
 @testset "SequenceSpace" begin
@@ -38,7 +39,7 @@ using Interpolations # for fastinterp
 
         @testset "Het Agents Block" begin
             # Regression test against previous result (which is same as paper)
-            @test Jhh[(:r, :𝓀)] ≈ readdlm("../tempdata/ks_regression/jrk.csv", ',', Float64)
+            @test Jhh[(:r, :𝓀)] ≈ readdlm("testdata/jrk.csv", ',', Float64)
         end
         
         @testset "Graphs" begin
@@ -47,7 +48,7 @@ using Interpolations # for fastinterp
             Hu, Hx, G = zeros(model.T * nt, model.T * nu), zeros(model.T * nt, model.T * nx), zeros(model.T * nu, model.T * nx)
             # forward diff test
             SequenceSpace.fillG!(G, Hu, Hx, model, Val(:forward))
-            oldG = readdlm("../tempdata/ks_regression/ksG.csv", ',', Float64)
+            oldG = readdlm("testdata/ksG.csv", ',', Float64)
             @test G ≈ oldG
             # backward diff test
             SequenceSpace.resetnodematrices!(model, [:h])

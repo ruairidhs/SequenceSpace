@@ -14,7 +14,6 @@ using Distributions # for estimation
 using FiniteDiff
 using AdvancedMH
 using MCMCChains
-using StatsPlots
 
 # Krusell & Smith model
 
@@ -22,15 +21,12 @@ println("Load data...")
 
 #region ===== Import parameters =====
 
-# For comparability, I import the same grids and parameters used in the paper
-
-# file path to where grids are saved
-fp = "/Users/ruairidh/.julia/dev/SequenceSpace/"
+# For comparability, I import the same grids used in the paper
 
 # Asset grid, exogenous productivity grid and transpose exogenous transition matrix
-const agrid = readdlm(fp * "tempdata/paper_ks/a_grid.csv", ',', Float64)[:, 1]
-const egrid = readdlm(fp * "tempdata/paper_ks/e_grid.csv", ',', Float64)[:, 1]
-const Qt    = readdlm(fp * "tempdata/paper_ks/Pi.csv", ',', Float64) |> permutedims
+const agrid = readdlm("parameterdata/a_grid.csv", ',', Float64)[:, 1]
+const egrid = readdlm("parameterdata/e_grid.csv", ',', Float64)[:, 1]
+const Qt    = readdlm("parameterdata/Pi.csv", ',', Float64) |> permutedims
 
 # confirm that egrid and Qt are such that L is normalized to 1
 invariant_dist = Qt^1000 * ones((length(egrid))) / length(egrid)
@@ -43,7 +39,7 @@ const α = 0.11 # capital parameters
 const T = 300 # time horizon for sequence space jacobian
 
 # U.S. output data to use for estimation 
-output_data = readdlm(fp * "data/output_detrended.csv", ',', Float64)
+output_data = readdlm("parameterdata/output_detrended.csv", ',', Float64)
 
 #endregion =====
 
@@ -76,7 +72,7 @@ println("Household block...")
 # The heterogenous agent household block maps (r, w) -> (𝓀, c)
 
 # File containing iteration functions for the household block
-include(fp * "examples/ks_household.jl")
+include("ks_household.jl")
 
 hh_block = HetBlock(
     [:r, :w], [:𝓀, :c], 300, # inputs, outputs, and time horizon for jacobian
@@ -161,7 +157,7 @@ plot(
     layout = (1, 2), size=(1200,400),
     bottom_margin=4mm
 )
-savefig("./examples/jhh.pdf")
+# savefig("jhh.pdf")
 
 #endregion
 
@@ -183,7 +179,7 @@ plot(
     layout = (1, 2), size=(1200,400),
     bottom_margin = 4mm
 )
-savefig("./examples/geky.pdf")
+# savefig("examples/geky.pdf")
 
 #endregion 
 
@@ -264,9 +260,10 @@ function mcmc(posterior, draws, posteriormode, scaling_factor)
 end
 
 chain = mcmc(
-    posteriordensity, 100, Optim.minimizer(res), 2.50
+    posteriordensity, 100000, Optim.minimizer(res), 2.50
 )
 
+#= # Log estimation results
 println("===== ESTIMATION ======")
 println("=========================")
 println("Parameters: ρ, θ, σ")
@@ -276,13 +273,14 @@ for p in Optim.minimizer(res)
 end
 
 println("MCMC Chain Results:")
-display(chain)
+display(chain[50000:end])
+=#
 
 #endregion
 
 #region ===== Benchmarking =====
-
-prinln("Benchmarking...")
+#=
+println("Benchmarking...")
 
 # Fake news
 fakenews = @benchmark jacobian($hh_block)
@@ -305,26 +303,31 @@ geneq_back = @benchmark geneqjacobians!($Gsbenchmark, $G, $Hu, $Hx, $model, Val(
 ll_bm = @benchmark likelihood([0.9, 0.1, 0.2])
 
 # posterior mode
-pm_bm = get_posterior_mode($posteriordensity, mode.($priors))
+pm_bm = @benchmark get_posterior_mode($posteriordensity, mode.($priors))
 
 println("===== BENCHMARKING ======")
 println("=========================")
 
 println("FAKE NEWS")
 display(fakenews)
+println("")
 
 println("GEN EQ FORWARD")
 display(geneq_forw)
+println("")
 
 println("GEN EQ BACKWARD")
 display(geneq_back)
+println("")
 
 println("LIKELIHOOD")
 display(ll_bm)
+println("")
 
 println("POSTERIOR MODE")
 display(pm_bm)
-
+println("")
+=#
 println("========================")
 
 #endregion

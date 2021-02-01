@@ -12,15 +12,18 @@ using Distributions # for estimation
 using Optim # for posterior mode
 using BenchmarkTools
 using Plots.PlotMeasures
+using FiniteDiff
+using AdvancedMH
+using MCMCChains
 
 #region ===== Import parameters =====
 
 println("Load data...")
 
 # Grids and exogenous transition matrix
-const agrid = readdlm("tempdata/paper_hank/hank_a_grid.csv", ',', Float64)[:, 1]
-const egrid = readdlm("tempdata/paper_hank/hank_e_grid.csv", ',', Float64)[:, 1]
-const Qt    = readdlm("tempdata/paper_hank/hank_Pi.csv", ',', Float64) |> permutedims
+const agrid = readdlm("parameterdata/hank_a_grid.csv", ',', Float64)[:, 1]
+const egrid = readdlm("parameterdata/hank_e_grid.csv", ',', Float64)[:, 1]
+const Qt    = readdlm("parameterdata/hank_Pi.csv", ',', Float64) |> permutedims
 
 invariant_dist = Qt^1000 * (ones(axes(Qt, 1)) / size(Qt, 1))
 
@@ -48,7 +51,7 @@ const rstarss = rss # taylor rule shock
 const T = 300 # time horizon for sequence space jacobian
 
 # US data, 1966 - 2004
-observed_data = readdlm("data/hank_data.csv", ',', Float64)
+observed_data = readdlm("parameterdata/hank_data.csv", ',', Float64)
 
 # Dictionary:
 #   - Unknowns:
@@ -70,7 +73,7 @@ observed_data = readdlm("data/hank_data.csv", ',', Float64)
 #       - N: firm labour demand
 
 #region ===== Household block and calibration =====
-prinln("Calibration...")
+println("Calibration...")
 # The heterogenous agent household block maps (r, w, d, τ) => (𝒜, n, 𝒩, C)
 
 # File containing iteration and steady-state functions for the household block
@@ -251,7 +254,7 @@ plot(
     layout = (1, 1), size=(600,400),
     bottom_margin = 4mm
 )
-savefig("./examples/hank_gepirs.pdf")
+#savefig("hank_gepirs.pdf")
 
 #endregion
 
@@ -310,29 +313,30 @@ function mcmc(posterior, draws, posteriormode, scaling_factor)
 
     return sample(
         model, spl, draws,
-        param_names = ["ρ", "θ", "σ"],
+        param_names = ["rs-ρ", "G-ρ", "μ-ρ", "rs-σ", "G-σ", "μ-σ"],
         chain_type=Chains
     )
 end
 
 chain = mcmc(
-    posteriordensity, 100, Optim.minimizer(res), 2.50
+    posteriordensity, 100000, Optim.minimizer(res), 1.10
 )
 
+# Log estimation results
 println("===== ESTIMATION ======")
 println("=========================")
-println("Parameters: ρ, θ, σ")
+println("Parameters: rs-ρ, G-ρ, μ-ρ, rs-σ, G-σ, μ-σ")
 println("Posterior modes:")
 for p in Optim.minimizer(res)
     println(p)
 end
 
 println("MCMC Chain Results:")
-display(chain)
+display(chain[50000:end])
 
 #region ===== Benchmarking =====
-
-prinln("Benchmarking...")
+#=
+println("Benchmarking...")
 
 # Fake news
 fakenews = @benchmark jacobian($hh_block)
@@ -348,33 +352,38 @@ G  = zeros(T * nu, T * nx)
 
 geneq_forw = @benchmark geneqjacobians!($Gsbenchmark, $G, $Hu, $Hx, $model, Val(:forward))
 
-SequenceSpace.resetnodematrices!(model, [:h])
+SequenceSpace.resetnodematrices!(model, [])
 geneq_back = @benchmark geneqjacobians!($Gsbenchmark, $G, $Hu, $Hx, $model, Val(:backward))
 
 # likelihood
 ll_bm = @benchmark likelihood([0.6, 0.9, 0.9, 0.5, 0.5, 2.0])
 
 # posterior mode
-pm_bm = get_posterior_mode($posteriordensity, mode.($priors))
+pm_bm = @benchmark get_posterior_mode($posteriordensity, mode.($priors))
 
 println("===== BENCHMARKING ======")
 println("=========================")
 
 println("FAKE NEWS")
 display(fakenews)
+println("")
 
 println("GEN EQ FORWARD")
 display(geneq_forw)
+println("")
 
 println("GEN EQ BACKWARD")
 display(geneq_back)
+println("")
 
 println("LIKELIHOOD")
 display(ll_bm)
+println("")
 
 println("POSTERIOR MODE")
 display(pm_bm)
-
+println("")
+=#
 println("========================")
 
 #endregion

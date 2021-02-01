@@ -2,11 +2,9 @@
 using DelimitedFiles
 using LinearAlgebra
 
-fp = "/Users/ruairidh/.julia/dev/SequenceSpace/"
-
-const agrid = readdlm(fp * "tempdata/paper_ks/a_grid.csv", ',', Float64)[:, 1]
-const egrid = readdlm(fp * "tempdata/paper_ks/e_grid.csv", ',', Float64)[:, 1]
-const Qt    = readdlm(fp * "tempdata/paper_ks/Pi.csv", ',', Float64) |> permutedims
+const agrid = readdlm("testdata/a_grid.csv", ',', Float64)[:, 1]
+const egrid = readdlm("testdata/e_grid.csv", ',', Float64)[:, 1]
+const Qt    = readdlm("testdata/Pi.csv", ',', Float64) |> permutedims
 
 invariant_dist = Qt^1000 * ones((length(egrid))) / length(egrid)
 @assert dot(egrid, invariant_dist) ≈ 1
@@ -18,7 +16,7 @@ const α = 0.11 # capital parameters
 const T = 300 # time horizon for sequence space jacobian
 
 # U.S. output data to use for estimation 
-output_data = readdlm(fp * "data/output_detrended.csv", ',', Float64)
+output_data = readdlm("testdata/output_detrended.csv", ',', Float64)
 
 firms_block = @simpleblock [:k, :z] [:r, :w, :y] [3.0, 1.0] (k, z) -> begin
     r = α * z[0] * k[-1] ^ (α - 1) - δ
@@ -29,7 +27,7 @@ end
 
 market_clearing_block = @simpleblock [:𝓀, :k] [:h] [3.0, 3.0] (𝓀, k) -> [𝓀[0] - k[0]]
 
-include(fp * "examples/ks_household.jl")
+include("../examples/ks_household.jl")
 
 hh_block = HetBlock(
     [:r, :w], [:𝓀, :c], 300, # inputs, outputs, and time horizon for jacobian

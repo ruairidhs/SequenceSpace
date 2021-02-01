@@ -1,13 +1,13 @@
 module SequenceSpace
 
-using ForwardDiff
+using Colors
 using FFTW
+using ForwardDiff
+using GraphPlot
+using LightGraphs
 using LinearAlgebra
 using LoopVectorization
 using SparseArrays
-using LightGraphs
-using GraphPlot
-using Colors
 
 export Block,
        inputs,
